@@ -1,0 +1,48 @@
+{
+  "bd_name": "rocelet",
+  "prj_name": "qsfp28-fmc-rocelet",
+  "groups": [
+    {
+      "label": "fpga",
+      "name": "FPGA"
+    }
+  ],
+  "designs": [
+    {
+      "publish": true,
+      "label": "kcu116",
+      "board": "KCU116",
+      "link": "https://www.xilinx.com/kcu116",
+      "url": "xilinx.com",
+      "boardname": "kcu116",
+      "bdscript": "microblaze",
+      "lanes": [
+        0
+      ],
+      "ports": 1,
+      "fec": "rs",
+      "linkspeed": "100",
+      "connector": "HPC",
+      "group": "fpga",
+      "selftest": true,
+      "engine": {
+        "NUM_QP": 16,
+        "NUM_MR": 16,
+        "READ_DEPTH": 16,
+        "MAX_WR": 128,
+        "RTX_MODE": "RING",
+        "RING_BYTES": 262144,
+        "HSB_EN": 1
+      },
+      "mem_bytes": 262144,
+      "baremetal": true,
+      "petalinux": false,
+      "yocto": false,
+      "license": false,
+      "ip_license": true,
+      "cfgmem": true,
+      "flashsize": "128",
+      "flashintf": "SPIx4"
+    }
+  ]
+}

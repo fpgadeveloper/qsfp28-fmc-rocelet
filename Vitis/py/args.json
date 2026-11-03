@@ -1,0 +1,25 @@
+{
+    "bd_name": "rocelet",
+    "app_name": "rocelet_console",
+    "app_template": "None",
+    "bsp_libs": [],
+    "src": {
+        "all": [
+            "common/src",
+            {
+                "dir": "../submodules/rocelet/sw",
+                "files": [
+                    "rocelet_regs.h"
+                ]
+            }
+        ]
+    },
+    "linker_script_mods": {
+        "microblaze": "relocate_to_local_mem"
+    },
+    "stack_size": "0x2000",
+    "heap_size": "0x1000",
+    "compile_optimization": "-O2",
+    "gc_sections": true,
+    "combine_bit_elf": true
+}

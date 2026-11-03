@@ -1,0 +1,25 @@
+# B5 hardware tour (rocelet_beam_app.py --source roce --preset 1 --attract-idle 0 --script @tests/script_b5_tour.txt);
+# times in s from the first frame shown; webcam photos at the times in b5/bin/tour_photos.sh
+10 key 2
+20 key B
+30 key B
+30.5 key 3
+40 key B
+50 key B
+50.5 key 4
+60 key 5
+70 key C
+82 key B
+92 key C
+100 key B
+100.5 key 2
+104 drag L -0.35 0.20 0.45 -0.35 6
+112 drag R 0.275 0.10 -0.50 0.35 6
+120 elem 3 0
+120.3 elem 4 4
+120.6 elem 5 6
+120.9 elem 2 2
+121.2 elem 6 3
+130 key A
+158 key A
+160 quit

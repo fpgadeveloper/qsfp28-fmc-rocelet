@@ -1,0 +1,4 @@
+[submodule "submodules/rocelet"]
+	path = submodules/rocelet
+	url = https://github.com/fpgadeveloper/rocelet
+	branch = main

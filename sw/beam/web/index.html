@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Beamforming Demo</title>
+<!-- qsfp28-fmc-rocelet beamforming demo: the tablet / phone page served by beam_web.py inside
+     rocelet_beam_app.py. Plain HTML / JS / CSS, no external resources. Copyright (c) 2026 Opsero
+     Electronic Design Inc. SPDX-License-Identifier: MIT -->
+<style>
+:root {
+  --bg: #0A0D13; --panel: #111722; --border: #2B3446; --label: #8FA3C2; --value: #F2F5FA;
+  --warn: #FF9F1C; --emit: #3CFF5A; --jam: #FF3B3B; --steer: #FFD21F; --on: #2C9C5A; --off: #5A1010;
+  --btn: #1A2232; --btn-on: #2B4E86;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--value);
+  font: 15px/1.3 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; -webkit-user-select: none; user-select: none; }
+header { display: flex; align-items: baseline; gap: 12px; padding: 10px 16px 6px; flex-wrap: wrap; }
+header h1 { font-size: 17px; margin: 0; letter-spacing: .04em; }
+header .src { color: var(--label); font-size: 13px; }
+#status { margin-left: auto; font-size: 13px; color: var(--label); }
+#status.live::before { content: "\25CF "; color: var(--emit); }
+#status.stale::before { content: "\25CF "; color: var(--warn); }
+main { display: flex; flex-wrap: wrap; gap: 14px; padding: 0 16px 16px; align-items: flex-start; }
+.panel { background: var(--panel); border: 2px solid var(--border); border-radius: 6px; }
+#skywrap { position: relative; width: min(100%, 78vh, 640px); flex: 0 0 auto; }
+#sky { display: block; width: 100%; aspect-ratio: 1 / 1; touch-action: none; border-radius: 4px; }
+#skytxt { position: absolute; left: 10px; top: 8px; pointer-events: none; }
+#bfname { font-size: 22px; font-weight: 600; }
+#scale { color: var(--label); font-size: 12px; }
+#hint { color: var(--warn); font-size: 15px; font-weight: 600; margin-top: 2px; }
+#attr { color: var(--warn); font-size: 14px; position: absolute; left: 10px; bottom: 8px; pointer-events: none; }
+#side { flex: 1 1 300px; min-width: 280px; display: flex; flex-direction: column; gap: 12px; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; }
+button { background: var(--btn); color: var(--value); border: 1px solid var(--border); border-radius: 6px;
+  min-height: 46px; min-width: 46px; padding: 0 14px; font: inherit; font-size: 15px; touch-action: manipulation; }
+button:active { filter: brightness(1.4); }
+button.on { background: var(--btn-on); border-color: #4A78C0; }
+.seg button { border-radius: 0; margin: 0; }
+.seg button:first-child { border-radius: 6px 0 0 6px; }
+.seg button:last-child { border-radius: 0 6px 6px 0; }
+.seg { display: inline-flex; }
+#drag-e.on { background: #1D5A2A; border-color: var(--emit); }
+#drag-j.on { background: #6A1A1A; border-color: var(--jam); }
+.lbl { color: var(--label); font-size: 12px; text-transform: uppercase; letter-spacing: .06em; margin-bottom: 4px; }
+#tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 6px; padding: 10px; }
+.tile .k { color: var(--label); font-size: 12px; }
+.tile .v { font-size: 19px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tile .v.bad { color: var(--warn); }
+#elwrap { display: flex; gap: 12px; align-items: flex-start; padding: 10px; }
+#el { width: 200px; height: 200px; touch-action: manipulation; flex: 0 0 auto; }
+#msg { color: var(--warn); min-height: 1.3em; font-size: 14px; }
+#err { color: var(--jam); font-size: 13px; min-height: 1.2em; }
+</style>
+</head>
+<body>
+<header>
+  <h1>8 x 8 PHASED-ARRAY RECEIVER</h1><span class="src" id="src">connecting</span>
+  <span id="status">connecting</span>
+</header>
+<main>
+  <div id="skywrap" class="panel">
+    <canvas id="sky" width="640" height="640" title="The sky map: the hemisphere in front of the array (centre = boresight, edge = horizon), brightness = power the array sees in that direction. Green circle = emitter, red square = jammer, yellow cross = the steered beam. Touch or drag to move a source"></canvas>
+    <div id="skytxt"><div id="bfname">-</div><div id="scale"></div><div id="hint"></div></div>
+    <div id="attr"></div>
+  </div>
+  <div id="side">
+    <div>
+      <div class="lbl">touch the sky to move the nearest</div>
+      <div class="seg"><button id="drag-e" class="on" title="A touch or drag on the sky moves the nearest emitter (a wanted signal, green circle); one is added if the scene has none">emitter</button><button id="drag-j" title="A touch or drag on the sky moves the nearest jammer (a strong QPSK interferer, red square); one is added if the scene has none">jammer</button></div>
+    </div>
+    <div>
+      <div class="lbl">presets</div>
+      <div class="row" id="presets"></div>
+    </div>
+    <div class="row">
+      <button id="b-bf" title="Switch between CONVENTIONAL (Bartlett delay-and-sum: the array's natural beam and sidelobes) and MVDR (adaptive: unit gain in the look direction, nulls on the other sources)">beamformer</button><button id="b-cal" title="Calibrate: estimate the 64 element gains from a scene with one source at a known direction (preset 5) and remove them from every following frame; again to switch it off">calibrate</button><button id="b-noise" title="Cycle the noise the board adds to every element sample: 100, 300, 1000, 3000 (int16 units); more noise raises the floor and makes MVDR nulls shallower">noise</button>
+      <button id="b-attract" title="Attract mode: the application moves every active source on its own circle; a drag, preset or reset stops it, beamformer / calibrate / noise do not; starts by itself after 10 s without input">attract</button><button id="b-reset" title="Reload the current preset: source positions and amplitudes, noise, element mask; drops the calibration">reset</button>
+    </div>
+    <div>
+      <div class="lbl">stream rate (the board follows from its next frame)</div>
+      <div class="row"><button id="b-rdn" title="Stream rate one step down (80, 64, 40, 20, 10, 5, 2, 1 Gb/s): the board sends frames more slowly from its next frame on; the picture does not change, the tiles do">rate -</button><button id="b-rup" title="Stream rate one step up (1, 2, 5, 10, 20, 40, 64, 80 Gb/s): the board sends frames faster from its next frame on; 80 is just under the test host's NIC-to-GPU ceiling">rate +</button></div>
+    </div>
+    <div id="msg"></div>
+    <div class="panel" id="tiles"></div>
+    <div class="panel" id="elwrap">
+      <canvas id="el" width="200" height="200" title="The 8 x 8 element layout seen from the front: green = on, red cross = failed. Tap an element to fail it (receiver noise only) and again to restore it"></canvas>
+      <div><div class="lbl">array 8 x 8</div><div style="color:var(--label);font-size:13px">tap an element to fail / restore it</div>
+        <div id="elcount" style="margin-top:6px"></div></div>
+    </div>
+    <div id="err"></div>
+  </div>
+</main>
+<script>
+"use strict";
+var STOPS = [[0.0, "#071233"], [0.30, "#0E2F78"], [0.55, "#1A6FC4"], [0.75, "#36B4E8"], [0.88, "#9AE6FF"], [1.0, "#FFFFFF"]];
+var C_PANEL = [0x11, 0x17, 0x22], C_RING = "#5A6C8C";
+function hex3(s) { return [parseInt(s.substr(1, 2), 16), parseInt(s.substr(3, 2), 16), parseInt(s.substr(5, 2), 16)]; }
+var LUT = (function () {               // as beam_ui.sky_lut(): -40 dB .. 0 dB
+  var t = new Uint8Array(256 * 3);
+  for (var i = 0; i < 256; i++) {
+    var x = i / 255, j = 0;
+    while (j < STOPS.length - 2 && x > STOPS[j + 1][0]) j++;
+    var a = STOPS[j], b = STOPS[j + 1], f = (x - a[0]) / (b[0] - a[0]);
+    var ca = hex3(a[1]), cb = hex3(b[1]);
+    for (var c = 0; c < 3; c++) t[3 * i + c] = Math.round(ca[c] + f * (cb[c] - ca[c]));
+  }
+  return t;
+})();
+
+var hello = {}, st = null, tFrame = 0, dirty = true;
+var dragCls = "emitter", touch = null;          // touch: {id, u, v} while a finger / pointer is down on the sky
+var sky = document.getElementById("sky"), sctx = sky.getContext("2d");
+var off = document.createElement("canvas"), octx, oimg, mask = null, maskG = 0;
+var el = document.getElementById("el"), ectx = el.getContext("2d");
+
+function $(id) { return document.getElementById(id); }
+
+// ---- requests: one at a time, in order; queued moves coalesce to the newest ----
+var q = [], busy = false;
+function send(obj) {
+  if (obj.cmd === "drag" && obj.phase === "move" && q.length && q[q.length - 1].cmd === "drag" && q[q.length - 1].phase === "move")
+    q[q.length - 1] = obj;
+  else q.push(obj);
+  pump();
+}
+function pump() {
+  if (busy || !q.length) return;
+  var obj = q.shift();
+  busy = true;
+  fetch("/control", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(obj) })
+    .then(function (r) { return r.json(); })
+    .then(function (j) { $("err").textContent = j.ok ? "" : (j.msg || "refused"); })
+    .catch(function (e) { $("err").textContent = "request failed: " + e; })
+    .then(function () { busy = false; pump(); });
+}
+
+// ---- sky ----
+function sizeCanvas(c, css) {
+  var d = window.devicePixelRatio || 1, w = Math.round(css * d);
+  if (c.width !== w) { c.width = w; c.height = w; dirty = true; }
+}
+function uvOf(e) {
+  var r = sky.getBoundingClientRect();
+  var u = 2 * (e.clientX - r.left) / r.width - 1, v = 1 - 2 * (e.clientY - r.top) / r.height;
+  return [Math.max(-1, Math.min(1, u)), Math.max(-1, Math.min(1, v))];
+}
+sky.addEventListener("pointerdown", function (e) {
+  e.preventDefault();
+  if (touch) return;
+  try { sky.setPointerCapture(e.pointerId); } catch (x) { /* older browsers */ }
+  var uv = uvOf(e);
+  touch = { id: e.pointerId, u: uv[0], v: uv[1] };
+  send({ cmd: "drag", phase: "down", u: uv[0], v: uv[1], cls: dragCls });
+  dirty = true;
+});
+sky.addEventListener("pointermove", function (e) {
+  if (!touch || e.pointerId !== touch.id) return;
+  e.preventDefault();
+  var uv = uvOf(e);
+  touch.u = uv[0]; touch.v = uv[1];
+  send({ cmd: "drag", phase: "move", u: uv[0], v: uv[1], cls: dragCls });
+  dirty = true;
+});
+function up(e) {
+  if (!touch || e.pointerId !== touch.id) return;
+  touch = null;
+  send({ cmd: "drag", phase: "up" });
+  dirty = true;
+}
+sky.addEventListener("pointerup", up);
+sky.addEventListener("pointercancel", up);
+
+function buildMask(g) {
+  mask = new Uint8Array(g * g);
+  for (var iy = 0; iy < g; iy++) for (var ix = 0; ix < g; ix++) {
+    var u = -1 + 2 * (ix + 0.5) / g, v = 1 - 2 * (iy + 0.5) / g;
+    mask[iy * g + ix] = (u * u + v * v <= 1) ? 1 : 0;
+  }
+  off.width = g; off.height = g; octx = off.getContext("2d"); oimg = octx.createImageData(g, g); maskG = g;
+}
+function drawMap() {
+  var g = st.g, bin = atob(st.map);
+  if (maskG !== g) buildMask(g);
+  var d = oimg.data;
+  for (var i = 0; i < g * g; i++) {
+    var p = 4 * i;
+    if (mask[i]) { var k = 3 * bin.charCodeAt(i); d[p] = LUT[k]; d[p + 1] = LUT[k + 1]; d[p + 2] = LUT[k + 2]; }
+    else { d[p] = C_PANEL[0]; d[p + 1] = C_PANEL[1]; d[p + 2] = C_PANEL[2]; }
+    d[p + 3] = 255;
+  }
+  octx.putImageData(oimg, 0, 0);
+}
+function xy(u, v, S) { return [(u + 1) / 2 * S, (1 - v) / 2 * S]; }
+function drawSky() {
+  sizeCanvas(sky, sky.getBoundingClientRect().width);
+  var S = sky.width, c = sctx, i, p;
+  c.fillStyle = "rgb(17,23,34)"; c.fillRect(0, 0, S, S);
+  if (st) {
+    c.imageSmoothingEnabled = true;
+    c.drawImage(off, 0, 0, S, S);
+    // the disc's rim at r = 1 (the map's mask edge is blocky at G = 128)
+    c.save(); c.beginPath(); c.rect(0, 0, S, S); c.arc(S / 2, S / 2, S / 2, 0, 2 * Math.PI, true);
+    c.fillStyle = "rgb(17,23,34)"; c.fill("evenodd"); c.restore();
+  }
+  c.strokeStyle = C_RING; c.lineWidth = Math.max(2, S / 320);
+  c.beginPath(); c.arc(S / 2, S / 2, S / 2 - c.lineWidth, 0, 2 * Math.PI); c.stroke();
+  if (!st) return;
+  var r = S * 0.030, lw = Math.max(2, S / 200);
+  for (i = 0; i < st.sources.length; i++) {
+    var s = st.sources[i]; p = xy(s.u, s.v, S);
+    for (var pass = 0; pass < 2; pass++) {
+      c.lineWidth = pass ? lw : lw * 2.2;
+      c.strokeStyle = pass ? (s.kind === "emitter" ? "#3CFF5A" : "#FF3B3B") : "rgba(0,0,0,0.85)";
+      c.beginPath();
+      if (s.kind === "emitter") c.arc(p[0], p[1], r, 0, 2 * Math.PI); else c.rect(p[0] - r, p[1] - r, 2 * r, 2 * r);
+      c.stroke();
+    }
+    if (st.drag === s.i) { c.strokeStyle = "rgba(255,255,255,0.9)"; c.lineWidth = 2; c.beginPath(); c.arc(p[0], p[1], r * 1.6, 0, 2 * Math.PI); c.stroke(); }
+  }
+  p = xy(st.steer[0], st.steer[1], S);                       // the steered beam: yellow cross
+  var a = S * 0.026, g = S * 0.008;                          // open cross: a gap in the middle keeps the peak visible
+  c.strokeStyle = "#FFD21F"; c.lineWidth = lw;
+  c.beginPath();
+  c.moveTo(p[0] - a, p[1]); c.lineTo(p[0] - g, p[1]); c.moveTo(p[0] + g, p[1]); c.lineTo(p[0] + a, p[1]);
+  c.moveTo(p[0], p[1] - a); c.lineTo(p[0], p[1] - g); c.moveTo(p[0], p[1] + g); c.lineTo(p[0], p[1] + a);
+  c.stroke();
+  if (touch) {                                                // the finger, drawn at once (the source follows within ~0.1 s)
+    p = xy(touch.u, touch.v, S);
+    c.strokeStyle = "rgba(255,255,255,0.9)"; c.lineWidth = 2;
+    c.beginPath(); c.arc(p[0], p[1], r * 1.9, 0, 2 * Math.PI); c.stroke();
+  }
+}
+
+// ---- element grid: ix to the right, iy up (as the monitor) ----
+function drawEl() {
+  sizeCanvas(el, el.getBoundingClientRect().width);
+  var S = el.width, cs = S / 8, c = ectx;
+  c.fillStyle = "#0A0D13"; c.fillRect(0, 0, S, S);
+  if (!st) return;
+  var n = 0;
+  for (var k = 0; k < 64; k++) {
+    var on = st.enable.charAt(k) === "1", ix = k % 8, iy = (k / 8) | 0, x = ix * cs, y = (7 - iy) * cs;
+    if (on) n++;
+    c.fillStyle = on ? "#2C9C5A" : "#5A1010";
+    c.fillRect(x + 2, y + 2, cs - 4, cs - 4);
+    if (!on) {
+      c.strokeStyle = "#FF4A4A"; c.lineWidth = Math.max(1.5, cs / 12);
+      c.beginPath(); c.moveTo(x + 5, y + 5); c.lineTo(x + cs - 5, y + cs - 5); c.moveTo(x + cs - 5, y + 5); c.lineTo(x + 5, y + cs - 5); c.stroke();
+    }
+  }
+  $("elcount").textContent = n + " / 64 on";
+}
+el.addEventListener("click", function (e) {
+  var r = el.getBoundingClientRect();
+  var ix = Math.floor(8 * (e.clientX - r.left) / r.width), iy = 7 - Math.floor(8 * (e.clientY - r.top) / r.height);
+  if (ix >= 0 && ix < 8 && iy >= 0 && iy < 8) send({ cmd: "element", k: 8 * iy + ix });
+});
+
+// ---- tiles + buttons ----
+var TILES = [["stream", "Gb/s"], ["frames", "frames /s in"], ["shown", "shown /s"], ["lost", "lost"], ["errors", "errors"],
+  ["gpu", "GPU ms /frame"], ["m2d", "mouse->data"], ["m2p", "mouse->pixel"], ["bf", "beamformer"], ["cal", "calibration"],
+  ["scene", "scene"], ["rate", "rate set"]];
+(function () {
+  var h = "";
+  for (var i = 0; i < TILES.length; i++)
+    h += '<div class="tile"><div class="k">' + TILES[i][1] + '</div><div class="v" id="t-' + TILES[i][0] + '">-</div></div>';
+  $("tiles").innerHTML = h;
+  var names = { 1: "1 single", 2: "2 jammer", 3: "3 two close", 4: "4 failed el.", 5: "5 uncal." };
+  var hints = { 1: "Preset 1: one CW emitter; the main lobe and the sidelobe grid of an 8 x 8 array",
+                2: "Preset 2: an LFM radar pulse and a QPSK jammer 18 dB stronger; conventional shows only the jammer, MVDR shows both and nulls the jammer",
+                3: "Preset 3: two CW emitters one beamwidth apart; conventional merges them, MVDR separates them",
+                4: "Preset 4: preset 1 with six elements failed; the sidelobes rise and lose their grid",
+                5: "Preset 5: one source at boresight with random element gain errors; press calibrate to fix the array" };
+  var p = $("presets");
+  [1, 2, 3, 4, 5].forEach(function (n) {
+    var b = document.createElement("button"); b.textContent = names[n]; b.id = "p-" + n; b.title = hints[n];
+    b.addEventListener("click", function () { send({ cmd: "preset", n: n }); });
+    p.appendChild(b);
+  });
+})();
+function setTile(id, txt, bad) { var e = $("t-" + id); e.textContent = txt; e.className = bad ? "v bad" : "v"; }
+function fmt(x, d) { return (x === null || x === undefined) ? "-" : Number(x).toFixed(d); }
+function updateText() {
+  var t = st.tiles;
+  setTile("stream", fmt(t.gbps, 2)); setTile("frames", fmt(t.fps_in, 0)); setTile("shown", fmt(t.shown, 1));
+  setTile("lost", t.lost + (t.lost_start ? " (+" + t.lost_start + " start)" : ""), t.lost > 0);
+  setTile("errors", String(t.errors), t.errors > 0); setTile("gpu", fmt(t.gpu_ms, 2));
+  setTile("m2d", t.m2d_ms === null ? "-" : fmt(t.m2d_ms, 1) + " ms"); setTile("m2p", t.m2p_ms === null ? "-" : fmt(t.m2p_ms, 1) + " ms");
+  var bf = st.beamformer === "mvdr" ? "MVDR" : "CONV";
+  setTile("bf", bf); setTile("cal", st.cal.on ? "ON " + fmt(st.cal.err_pct, 1) + " %" : "OFF");
+  setTile("scene", "#" + st.scene.id); setTile("rate", t.rate_set ? t.rate_set + " Gb/s" : (t.rate_set === 0 ? "unpaced" : "-"));
+  $("bfname").textContent = st.beamformer === "mvdr" ? "MVDR" : "CONVENTIONAL";
+  $("scale").textContent = st.scale;
+  $("hint").textContent = st.hint || "";
+  $("attr").textContent = st.attract ? "ATTRACT MODE" : "";
+  $("msg").textContent = st.msg || "";
+  $("b-bf").textContent = "beamformer: " + bf;
+  $("b-cal").className = st.cal.on ? "on" : ""; $("b-attract").className = st.attract ? "on" : "";
+  for (var n = 1; n <= 5; n++) $("p-" + n).className = (st.preset === n) ? "on" : "";
+}
+$("b-bf").addEventListener("click", function () { send({ cmd: "beamformer" }); });
+$("b-cal").addEventListener("click", function () { send({ cmd: "calibrate" }); });
+$("b-noise").addEventListener("click", function () { send({ cmd: "noise" }); });
+$("b-attract").addEventListener("click", function () { send({ cmd: "attract" }); });
+$("b-reset").addEventListener("click", function () { send({ cmd: "reset" }); });
+$("b-rdn").addEventListener("click", function () { send({ cmd: "rate", step: -1 }); });
+$("b-rup").addEventListener("click", function () { send({ cmd: "rate", step: 1 }); });
+$("drag-e").addEventListener("click", function () { dragCls = "emitter"; $("drag-e").className = "on"; $("drag-j").className = ""; });
+$("drag-j").addEventListener("click", function () { dragCls = "jammer"; $("drag-j").className = "on"; $("drag-e").className = ""; });
+
+// ---- stream ----
+function connect() {
+  var es = new EventSource("/events");
+  es.addEventListener("hello", function (e) {
+    hello = JSON.parse(e.data);
+    var src = { roce: "KCU116 -> 100G RoCE -> GPU", synthetic: "synthetic (bit-exact model)", csynthetic: "synthetic (CUDA model)" };
+    $("src").textContent = src[hello.source] || hello.source || "";
+  });
+  es.addEventListener("frame", function (e) {
+    st = JSON.parse(e.data); tFrame = Date.now();
+    drawMap(); updateText(); dirty = true;
+  });
+  es.onerror = function () { $("status").textContent = "reconnecting"; $("status").className = "stale"; };
+}
+function loop() {
+  var age = Date.now() - tFrame;
+  if (st && age < 2000) { $("status").textContent = "live"; $("status").className = "live"; }
+  else if (st) { $("status").textContent = "no frames for " + Math.round(age / 1000) + " s"; $("status").className = "stale"; }
+  if (dirty) { dirty = false; drawSky(); drawEl(); }
+  window.requestAnimationFrame(loop);
+}
+window.addEventListener("resize", function () { dirty = true; });
+connect();
+window.requestAnimationFrame(loop);
+</script>
+</body>
+</html>

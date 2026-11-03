@@ -1,0 +1,21 @@
+# 60 s scripted session for the headless test (rocelet_beam_app.py --script @tests/script_60s.txt);
+# times in s from the first frame shown. Commands: key NAME | move u v | press/release L|R|M |
+# drag L|R u0 v0 u1 v1 secs | scroll dy | elem ix iy | quit
+2 key B
+5 drag L -0.35 0.20 -0.10 0.45 2
+9 drag R 0.275 0.10 0.00 -0.30 2
+12 scroll 6
+14 key B
+17 key 1
+20 elem 3 0
+20.5 elem 4 4
+21 elem 5 6
+24 key B
+26 key 5
+29 key C
+33 key C
+35 key 3
+39 key N
+42 key A
+52 key 4
+56 key R
