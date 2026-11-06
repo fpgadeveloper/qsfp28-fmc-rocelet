@@ -296,8 +296,8 @@ Measured against the ConnectX-6 Dx (its link pause on, the default):
   honoured each of its own PAUSE frames (287 sent, 287 received, 287 honoured) during a
   line-rate WRITE at PMTU 1024, with no loss. Over the cable, on the Linux image: an HSB stream
   into GPU memory requested at 95 Gb/s, above the test host's NIC-to-GPU limit, ran lossless at
-  77.6 Gb/s with `pause rx 1`; the ConnectX-6 Dx sent 55,650 PAUSE frames and the MRMAC
-  honoured them ([](hsb.md#measured-limits-test-host)).
+  81.6 Gb/s with PAUSE RX on (the default); the ConnectX-6 Dx sent about 55,500 PAUSE frames per run
+  and the MRMAC honoured every one ([](hsb.md#measured-limits-test-host)).
 
 ## Memory windows: URAM and PS DDR over the NoC
 

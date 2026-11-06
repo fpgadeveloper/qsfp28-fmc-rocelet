@@ -11,7 +11,7 @@ producer watchdog, the link pause and the module API. Since version 0.5.0 also o
 target at 40G (enumeration, registers, IQ16 and counter frames into GPU memory at 39.0 Gb/s with
 every frame checked, the beamforming demo). Since version 0.6.0 also on the VCK190 target at
 100G (Linux image): enumeration, registers (`LINK_GBPS` 100, `TARGET` "VCK1"), counter and IQ16
-frames into GPU memory at 72.2 and 76.1 Gb/s with every frame checked, 77.6 Gb/s without loss
+frames into GPU memory at 72.2 and 76.1 Gb/s with every frame checked, 81.6 Gb/s without loss
 at a requested 95 Gb/s with PAUSE RX on ([below](#measured-limits-test-host)), the beamforming
 demo. Known limitations: see [](revision_history.md).
 ```
@@ -188,8 +188,8 @@ numbers belong to that host, not to the design: the board sends 97.6 Gb/s unpace
 | Module API (asynchronous only), board | 100 % at 40 Gb/s, 91.5 % at 80 Gb/s (C++ checker, 2 CPU cores); lost and consumer-dropped frames are not separable |
 | Data-plane start after an idle GPU | a 1-3 s `--start-delay` at 80 Gb/s cost 420,000-550,000 NIC discards and damaged frames: the idle GPU had dropped to its lowest PCIe link speed (Gen1) |
 | Link drop (console `link`) during 40 Gb/s | producer paused ~7 s (relink, partner link-up, 2 s grace), 0 frames lost, 1 resync |
-| RoCE receiver into GPU memory, VCK190, `--rate 90` / `95` | the host overruns (NIC discards, damaged frames), as on the KCU116 |
-| Same, VCK190, `--rate 95` with PAUSE RX on at the board (the default; `rl pause rx 1`) | 77.6 Gb/s, every frame checked, 0 NIC discards: the ConnectX-6 Dx sent 802.3x PAUSE frames (55,650 in the run) and the FPGA honoured them |
+| RoCE receiver into GPU memory, VCK190, `--rate 90` / `95` with PAUSE RX off (`rl pause rx 0`) | the host overruns (NIC discards, damaged frames), as on the KCU116 |
+| Same, VCK190, `--rate 95` with PAUSE RX on at the board (the default) | 81.6 Gb/s, IQ16 and counter frames, every frame checked, 0 NIC discards: the ConnectX-6 Dx sent 802.3x PAUSE frames (about 55,500 per run) and the FPGA honoured every one |
 
 ```{tip}
 To stream above the host's NIC-to-GPU limit without losses, let the host hold the board back:

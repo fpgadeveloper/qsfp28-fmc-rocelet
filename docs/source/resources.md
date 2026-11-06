@@ -277,7 +277,7 @@ measured by the receiving side, PAUSE TX on (the default) unless stated.
 |---|---|
 | PAUSE TX (the default): the FPGA's PAUSE frames during a host WRITE into the PS DDR window | the ConnectX-6 Dx counted every one (92,400) and honoured them: 79.37 Gb/s lossless with, 47.46 Gb/s with losses (recovered) without |
 | PAUSE RX (`pause rx 1`), GT PMA loopback, WRITE 64 KB x 200 at PMTU 1024 | 287 PAUSE frames sent, received and honoured, 0 lost (with PAUSE RX off: go-back-N recoveries, test passed) |
-| PAUSE RX (on by default on the VCK190), PAUSE frames from the host (Linux image, HSB stream into GPU memory requested at 95 Gb/s, above the host's NIC-to-GPU limit) | the ConnectX-6 Dx sent 55,650 PAUSE frames and the FPGA honoured them: 77.6 Gb/s, 0 host discards, every frame checked |
+| PAUSE RX (on by default on the VCK190), PAUSE frames from the host (Linux image, HSB stream into GPU memory requested at 95 Gb/s, above the host's NIC-to-GPU limit) | the ConnectX-6 Dx sent about 55,500 PAUSE frames per run and the FPGA honoured every one: 81.6 Gb/s, 0 host discards, every frame checked |
 
 ### Linux image
 
@@ -296,8 +296,8 @@ Blackwell GPU and NVIDIA's HSB 3.0.0 software.
 | `rl0` | ping both ways; flood ping 20000 x 1400 B, 0 lost; 4000-byte pings at MTU 4200 (rl0 comes up with MTU 1500); SSH and the web UI over rl0; the netdev DMA works with buffers above 4 GB |
 | TCP over rl0 (iperf3 on the A72) | MTU 4200: host to board 2.41 Gb/s (one stream) / 2.67 (four streams), board to host 2.69 / 3.50; MTU 1500: 1.68 / 1.67 Gb/s |
 | HSB device mode (`rl hsb on`): enumeration, registers | enumerated by NVIDIA's HSB 3.0.0 software, `LINK_GBPS` = 100, `TARGET` = "VCK1", 100 counter frames of 1 MiB |
-| HSB data plane into GPU memory, 1 MiB frames, `rocelet_hsb_app.py --mode check` | counter source at 10, 50 and 80 Gb/s requested (72.2 Gb/s at 80); IQ16 at 80 requested: 76.1 Gb/s, 191,328 frames bit-exact, 0 lost; at 90 / 95 the host overruns, as on the KCU116 |
-| Same at 95 Gb/s requested with PAUSE RX on (the default) | 77.6 Gb/s lossless, 0 host discards (55,650 PAUSE frames from the host honoured) |
+| HSB data plane into GPU memory, 1 MiB frames, `rocelet_hsb_app.py --mode check` | counter source at 10, 50 and 80 Gb/s requested (72.2 Gb/s at 80); IQ16 at 80 requested: 76.1 Gb/s, 191,328 frames bit-exact, 0 lost; at 90 / 95 with PAUSE RX off the host overruns, as on the KCU116 |
+| Same at 95 Gb/s requested with PAUSE RX on (the default) | 81.6 Gb/s lossless (IQ16 and counter), 0 host discards, every PAUSE frame from the host honoured |
 | Beamforming demo | `--rate 64`: stream at about 63.9 Gb/s, the board named VCK190 from its `TARGET` register, all 855 frames shown, 85 verified bit-exact, 0 lost |
 | Web UI | page and `/api/status` served (target VCK190, MAC MRMAC, link 100 Gb/s), commands through `/api/cmd`; page title `rocelet-v190` |
 

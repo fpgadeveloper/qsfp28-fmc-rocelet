@@ -60,7 +60,7 @@ VCK190 + OP120 on FMCP1, port 0, 3 m DAC to the ConnectX-6 Dx at 100000 with FEC
   rates (host WRITE 97.93, FPGA WRITE with immediate 92.30, host READ 96.54 Gb/s), the PS DDR
   window (256 MB region) host WRITE 97.85 / READ 88.94 Gb/s; `rl0` with flood ping, MTU 4200,
   SSH and TCP at 2.4-3.5 Gb/s; the web UI; the HSB device mode with NVIDIA's HSB 3.0.0 software
-  (IQ16 frames into GPU memory at 76.1 Gb/s, bit-exact; 77.6 Gb/s lossless at a requested
+  (IQ16 frames into GPU memory at 76.1 Gb/s, bit-exact; 81.6 Gb/s lossless at a requested
   95 Gb/s with PAUSE RX on, the host's PAUSE frames honoured by the MRMAC); the beamforming
   demo at about 63.9 Gb/s, the board named from its `TARGET` register.
 
