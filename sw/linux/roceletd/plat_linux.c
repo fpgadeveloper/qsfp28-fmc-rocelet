@@ -383,8 +383,11 @@ int plat_i2c_bus(UINTPTR base)
 		if (sscanf(e->d_name, "i2c-%d", &n) != 1) continue;
 		snprintf(p, sizeof(p), "/sys/bus/i2c/devices/%s", e->d_name);
 		if (!realpath(p, real)) continue;
-		/* .../amba_pl/80100000.i2c/i2c-3 */
-		if (strstr(real, want)) bus = n;
+		/* .../amba_pl/80100000.i2c/i2c-3: the adapter itself, not a mux channel below it */
+		char tail[320];
+		snprintf(tail, sizeof(tail), "/%s/%s", want, e->d_name);
+		size_t lr = strlen(real), lt = strlen(tail);
+		if (lr >= lt && !strcmp(real + lr - lt, tail)) bus = n;
 	}
 	closedir(d);
 	return bus;
