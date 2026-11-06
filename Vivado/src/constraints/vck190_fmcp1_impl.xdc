@@ -12,16 +12,15 @@
 #                  CLKOUT2 clk_dma   250 MHz  netdev AXI DMA + its NoC port
 #   eng_clk_wiz    CLKOUT0 clk_eng   engine (rocelet_sys clk, DDR window NoC ports; data.json clk_khz)
 #   axis_clk_wiz   CLKOUT0 clk_axis  390.625 MHz MRMAC AXIS client (tx/rx_axi_clk) + adapter MAC side
-# The GT clocks (from the 322.265625 MHz reference clock) meet the fabric only inside the
-# MRMAC (its own constraints) and in the adapter's FIFOs.
+# The GT clocks (created by the gt_quad_base / MRMAC constraints) meet the fabric only inside
+# the hard MRMAC (its own constraints); no fabric path crosses to them, so they are not grouped.
 set clk_sys  [get_clocks -of_objects [get_pins -hier -filter {NAME =~ *clk_wizard_0/inst/clock_primitive_inst/*/CLKOUT0}]]
 set clk_gen  [get_clocks -of_objects [get_pins -hier -filter {NAME =~ *clk_wizard_0/inst/clock_primitive_inst/*/CLKOUT1}]]
 set clk_dma  [get_clocks -of_objects [get_pins -hier -filter {NAME =~ *clk_wizard_0/inst/clock_primitive_inst/*/CLKOUT2}]]
 set clk_eng  [get_clocks -of_objects [get_pins -hier -filter {NAME =~ *eng_clk_wiz/inst/clock_primitive_inst/*/CLKOUT0}]]
 set clk_axis [get_clocks -of_objects [get_pins -hier -filter {NAME =~ *axis_clk_wiz/inst/clock_primitive_inst/*/CLKOUT0}]]
-set clk_gt   [get_clocks -include_generated_clocks -of_objects [get_ports {gt_ref_clk_0_clk_p[0]}]]
 set_clock_groups -asynchronous -group $clk_sys -group $clk_gen -group $clk_dma -group $clk_eng \
-  -group $clk_axis -group $clk_gt
+  -group $clk_axis
 
 # rocelet_sys (as on the KCU116 / ZCU106): the system reset synchroniser; gen_clk quasi-static words
 set_false_path -to [get_pins -hierarchical -filter {NAME =~ *rocelet_sys_0*rs_sync_reg*/PRE}]
