@@ -497,10 +497,16 @@ ConnectX-6 Dx forced to 40000 with FEC off, the same host: the application read 
 and limited the rate range to 1-40 Gb/s ("--rate 64 > the link: 40 Gb/s"); the stream ran at
 about 38.8 Gb/s at the 40 Gb/s step, followed the keys 40 → 20 → 10 → 20 → 40 (the `+` key at
 40 refused), and the page's `rate gbps=64` / `gbps=0.5` requests were clamped to 40 / 1; all
-1,652 frames shown, 150 frames verified bit-exact, 0 lost. The rest of this section was
-measured with the KCU116 at 100G.
+1,652 frames shown, 150 frames verified bit-exact, 0 lost.
 
-% TODO(m3): beamforming demo on the VCK190 at 100G (rate steps, frames verified / lost), and whether the host software should name the VCK190 itself instead of --board.
+**VCK190 (version 0.6.0, 100G).** VCK190 + OP120 port 0 on the Linux image, 3 m DAC to the
+ConnectX-6 Dx at 100000 with RS-FEC, the same host: the application named the board from its
+`TARGET` register (`VCK190 -> 100G RoCE -> GPU`, no `--board` needed), read `LINK_GBPS` = 100
+and offered the KCU116's rate range of 1-80 Gb/s; at `--rate 64` the stream ran at about
+63.9 Gb/s, all 855 frames shown, 85 frames verified bit-exact, 0 lost, 3.3 ms of GPU time per
+frame.
+
+The rest of this section was measured with the KCU116 at 100G.
 
 Board: KCU116 + OP120 port 0, 3 m DAC, RS-FEC, MTU 4200, to a ConnectX-6 Dx (port 1, forced
 100G) in a Lenovo P520 (Xeon Skylake-SP, PCIe Gen3) with an RTX PRO 4000 Blackwell; HSB 3.0.0

@@ -293,9 +293,10 @@ Measured against the ConnectX-6 Dx (its link pause on, the default):
   `pause tx 0` (the engine's receive FIFO overflowed; go-back-N recovered the losses).
 * **PAUSE RX** (`pause rx 1`): verified in the GT PMA loopback, where the engine received and
   honoured each of its own PAUSE frames (287 sent, 287 received, 287 honoured) during a
-  line-rate WRITE at PMTU 1024, with no loss. The ConnectX-6 Dx did not send PAUSE frames in
-  these tests, so the FPGA honouring a host's PAUSE over the cable is not characterised on this
-  target.
+  line-rate WRITE at PMTU 1024, with no loss. Over the cable, on the Linux image: an HSB stream
+  into GPU memory requested at 95 Gb/s, above the test host's NIC-to-GPU limit, ran lossless at
+  77.6 Gb/s with `pause rx 1`; the ConnectX-6 Dx sent 55,650 PAUSE frames and the MRMAC
+  honoured them ([](hsb.md#measured-limits-test-host)).
 
 ## Memory windows: URAM and PS DDR over the NoC
 
@@ -329,6 +330,10 @@ FIFO overflows and the transfer drops to 47.5 Gb/s with go-back-N recoveries, so
 on when the host writes into the PS DDR window. Traffic into and out of the URAM window and
 FPGA-to-host streams into host memory do not use this path (91.8-97.5 Gb/s,
 [](resources.md#measured-vck190_fmcp1-100g)).
+
+With the Linux image's 256 MB region at `0x6000_0000` the same ports carried more: host WRITE
+97.85 Gb/s with every beat checked, host READ 88.94 Gb/s ([](resources.md#linux-image)). The
+difference to the bare-metal buffer is not characterised further.
 
 **Both directions at once** need about 24.5 GB/s, which is the order of the whole DDR4
 interface's peak (DDR4-3200, 64 bits: 25.6 GB/s for reads and writes together) while Linux uses
@@ -364,7 +369,8 @@ engine clock and whole-frame drops on overflow for a source that cannot stop.
 
 The Versal PL has no device-DNA port, so `rocelet_sys` is built without its DNA reader
 (`DNA_EN` 0) and software reads the device's 128-bit DNA from the PMC's eFUSE cache: the
-bare-metal console directly, `roceletd` through Linux's `xilinx-secure-config` nvmem device.
+bare-metal console directly, `roceletd` through Linux's `xilinx-secure-config` nvmem device or,
+where that read is not supported (as on the 2025.2 image), read-only through `/dev/mem`.
 The HSB serial number is folded from it ([](hsb.md)).
 
 ## Board specifics

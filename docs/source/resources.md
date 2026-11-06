@@ -234,9 +234,10 @@ limit.
 
 VCK190 + OP120 on FMCP1, QSFP28 port 0, 3 m passive QSFP28 DAC to an NVIDIA ConnectX-6 Dx in the
 same test host, forced to 100000, auto-negotiation off, FEC `Auto` (active: RS-FEC), MTU 4200.
-Version 0.6.0, the bare-metal Cortex-A72 console loaded over JTAG; `rocelet_host` 0.2.0 on the
-host, host memory (no GPU); one QP, 64 KB messages unless stated, payload throughput as measured
-by the receiving side, PAUSE TX on (the default) unless stated.
+Version 0.6.0, the bare-metal Cortex-A72 console loaded over JTAG unless the section says
+[Linux image](#linux-image); `rocelet_host` 0.2.0 on the host, host memory (no GPU) except for
+the HSB and beamforming rows; one QP, 64 KB messages unless stated, payload throughput as
+measured by the receiving side, PAUSE TX on (the default) unless stated.
 
 ### Link
 
@@ -265,9 +266,10 @@ by the receiving side, PAUSE TX on (the default) unless stated.
   rates stay below that PMTU's line rate (about 92 Gb/s of payload).
 * The FPGA's WRITE with immediate into host memory is paced by the host's receive queue: the
   host counted a few `out_of_buffer` events (RNR NAK and retry), 0 data errors.
-* The PS DDR window carries about 79 Gb/s each way through one 512-bit NoC port per direction at
-  the 300 MHz engine clock; PAUSE TX keeps a host WRITE into it lossless
-  ([](versal_hw.md#bandwidth-of-the-ps-ddr-window)).
+* With the bare-metal console's 1 MB buffer the PS DDR window carries about 79 Gb/s each way
+  through one 512-bit NoC port per direction at the 300 MHz engine clock; PAUSE TX keeps a host
+  WRITE into it lossless ([](versal_hw.md#bandwidth-of-the-ps-ddr-window)). With the Linux
+  image's 256 MB region the same ports carried 97.85 / 88.94 Gb/s ([below](#linux-image)).
 
 ### PAUSE
 
@@ -275,5 +277,32 @@ by the receiving side, PAUSE TX on (the default) unless stated.
 |---|---|
 | PAUSE TX (the default): the FPGA's PAUSE frames during a host WRITE into the PS DDR window | the ConnectX-6 Dx counted every one (92,400) and honoured them: 79.37 Gb/s lossless with, 47.46 Gb/s with losses (recovered) without |
 | PAUSE RX (`pause rx 1`), GT PMA loopback, WRITE 64 KB x 200 at PMTU 1024 | 287 PAUSE frames sent, received and honoured, 0 lost (with PAUSE RX off: go-back-N recoveries, test passed) |
-| PAUSE RX, PAUSE frames from the host | not characterised (the ConnectX-6 Dx sent none in these tests) |
-% TODO(m3): rl0 (flood ping, TCP), HSB device mode and data plane into GPU memory at 100G, beamforming demo at 100 Gb/s, web UI.
+| PAUSE RX, PAUSE frames from the host (Linux image, `rl pause rx 1`, HSB stream into GPU memory requested at 95 Gb/s, above the host's NIC-to-GPU limit) | the ConnectX-6 Dx sent 55,650 PAUSE frames and the FPGA honoured them: 77.6 Gb/s, 0 host discards, every frame checked |
+
+### Linux image
+
+The Linux image of version 0.6.0 from the SD card: `roceletd`, `rl` over SSH, the QP records
+over SSH; same cable and host. The HSB and beamforming rows use the host's RTX PRO 4000
+Blackwell GPU and NVIDIA's HSB 3.0.0 software.
+
+| Test | Result |
+|---|---|
+| Boot | power on to the login prompt 42-46 s, `rl0` answering the host's ping at about 45 s; warm reboot about 45 s; 100G link up 4.0-7.0 s after `roceletd` starts |
+| Self-test | `rl t pma` SELFTEST PASS 19/19 (exit status 0), `rl t full pma` 23/23 (WRITE 4 KB one QP 95.70 Gb/s, 64 KB four QPs 97.89 Gb/s) |
+| RDMA, PMTU 4096 | host WRITE 97.93, FPGA WRITE with immediate 92.30, host READ of the URAM window 96.54, host SEND (8 KB) 85.85 Gb/s |
+| RDMA, PMTU 1024 | host WRITE 90.39, FPGA WRITE with immediate 87.46, host READ 80.91, host SEND (8 KB) 91.66 Gb/s |
+| PS DDR window (the 256 MB region at `0x6000_0000`, `mr=3`), PMTU 4096 | host WRITE 97.85 Gb/s, every beat checked (`rl ddr check`); host READ 88.94 Gb/s (`rl ddr fill`) |
+| Line-rate soak | host WRITE for 60 s: 96.62 Gb/s, 723.8 GB, 11.0 M messages; afterwards 0 bad FCS, RS-FEC 0 corrected / 0 uncorrectable codewords, 0 link drops; host: 0 CRC and 0 symbol errors |
+| `rl0` | ping both ways; flood ping 20000 x 1400 B, 0 lost; 4000-byte pings at MTU 4200 (rl0 comes up with MTU 1500); SSH and the web UI over rl0; the netdev DMA works with buffers above 4 GB |
+| TCP over rl0 (iperf3 on the A72) | MTU 4200: host to board 2.41 Gb/s (one stream) / 2.67 (four streams), board to host 2.69 / 3.50; MTU 1500: 1.68 / 1.67 Gb/s |
+| HSB device mode (`rl hsb on`): enumeration, registers | enumerated by NVIDIA's HSB 3.0.0 software, `LINK_GBPS` = 100, `TARGET` = "VCK1", 100 counter frames of 1 MiB |
+| HSB data plane into GPU memory, 1 MiB frames, `rocelet_hsb_app.py --mode check` | counter source at 10, 50 and 80 Gb/s requested (72.2 Gb/s at 80); IQ16 at 80 requested: 76.1 Gb/s, 191,328 frames bit-exact, 0 lost; at 90 / 95 the host overruns, as on the KCU116 |
+| Same at 95 Gb/s requested with `rl pause rx 1` | 77.6 Gb/s lossless, 0 host discards (55,650 PAUSE frames from the host honoured) |
+| Beamforming demo | `--rate 64`: stream at about 63.9 Gb/s, the board named VCK190 from its `TARGET` register, all 855 frames shown, 85 verified bit-exact, 0 lost |
+| Web UI | page and `/api/status` served (target VCK190, MAC MRMAC, link 100 Gb/s), commands through `/api/cmd`; page title `rocelet-v190` |
+
+* The Linux figures of the URAM window and of host memory match the bare-metal console's. SEND of
+  8 KB messages ran faster at PMTU 1024 than at PMTU 4096.
+* The PS DDR window measured faster here (the 256 MB region at `0x6000_0000`) than with the
+  bare-metal console's 1 MB buffer (97.85 / 88.94 against 79.37 / 79.20 Gb/s) over the same NoC
+  ports; the difference is not characterised further.

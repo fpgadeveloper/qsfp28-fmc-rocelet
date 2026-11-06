@@ -21,14 +21,14 @@ interface on the 40G port), host RDMA into on-chip memory and into PS DDR at 40G
 802.3x PAUSE in both directions, the self-test, the HSB device mode and the beamforming demo at
 up to 40 Gb/s. **vck190_fmcp1** (new in 0.6.0, 100G): a Versal design with the hard MRMAC with
 RS-FEC, the engine on its own 300 MHz clock and the PS DDR window on the NoC, and the same
-software as the ZCU106 on the Cortex-A72. Hardware-validated: bare-metal (the Cortex-A72
-console: 100G RS-FEC link, the self-test, host RDMA at 91.8-97.5 Gb/s, FPGA WRITE with
-immediate at 93.5 Gb/s, the PS DDR window at about 79 Gb/s each way, 802.3x PAUSE, FEC off and
-on at run time); Linux image: pending.
+software as the ZCU106 on the Cortex-A72. Hardware-validated with the Linux image and the
+bare-metal Cortex-A72 console: 100G RS-FEC link, the self-test, host RDMA at 85.9-97.9 Gb/s,
+FPGA WRITE with immediate at 92.3-93.5 Gb/s, host RDMA into and out of the PS DDR window,
+802.3x PAUSE in both directions, FEC off and on at run time; on Linux also the daemon, command
+line and web UI, `rl0` with SSH over the 100G link, the HSB device mode into GPU memory at
+76 Gb/s and the beamforming demo.
 Measurements and known limitations: [](resources.md), [](revision_history.md).
 ```
-
-% TODO(m3): status box: Linux image on the VCK190 validated (daemon, rl, web UI, rl0, HSB, beamforming demo at 100G); drop "Linux image: pending".
 
 ![The test bench: KCU116 with the 2x QSFP28 FMC, a 100G AOC to the ConnectX-6 Dx in the GPU host, the beamforming demo on the host's monitor](images/setup-bench.jpg)
 

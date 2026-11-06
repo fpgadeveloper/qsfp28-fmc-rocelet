@@ -53,6 +53,14 @@ VCK190 + OP120 on FMCP1, port 0, 3 m DAC to the ConnectX-6 Dx at 100000 with FEC
   host READ 79.20 Gb/s; the ConnectX-6 Dx honours the MRMAC's PAUSE frames (92,400 counted);
   PAUSE RX verified in the GT loopback.
 * RS-FEC off and on again at run time (`fec 0` / `fec 1`, the host port matched).
+* Linux image: boot to the login prompt in 42-46 s, link up 4-7 s after `roceletd` starts;
+  `rl t pma` 19/19, `rl t full pma` 23/23; RDMA with the QP records over SSH at the bare-metal
+  rates (host WRITE 97.93, FPGA WRITE with immediate 92.30, host READ 96.54 Gb/s), the PS DDR
+  window (256 MB region) host WRITE 97.85 / READ 88.94 Gb/s; `rl0` with flood ping, MTU 4200,
+  SSH and TCP at 2.4-3.5 Gb/s; the web UI; the HSB device mode with NVIDIA's HSB 3.0.0 software
+  (IQ16 frames into GPU memory at 76.1 Gb/s, bit-exact; 77.6 Gb/s lossless at a requested
+  95 Gb/s with `pause rx 1`, the host's PAUSE frames honoured by the MRMAC); the beamforming
+  demo at about 63.9 Gb/s, the board named from its `TARGET` register.
 
 ### Resources and timing
 
@@ -63,16 +71,18 @@ clock 300 MHz, WNS +0.043 ns, WHS +0.012 ns, no critical warnings. See [](resour
 
 * **vck190_fmcp1**: building it needs Vivado Enterprise (the XCVC1902 is not in the Standard
   edition) and the no-cost MRMAC license. OP120 port 1 is not used.
-* The PS DDR window carries about 79 Gb/s in one direction (one 512-bit NoC port per direction),
-  below the 100G line rate: keep PAUSE TX on (the default) for host writes into it. Both
+* The PS DDR window (one 512-bit NoC port per direction) carried about 79 Gb/s in one direction
+  with the bare-metal console's 1 MB buffer and host WRITE 97.85 / READ 88.94 Gb/s with the
+  Linux image's 256 MB region: keep PAUSE TX on (the default) for host writes into it. Both
   directions at once share the DDR4 memory with Linux and do not reach line rate in both
   directions ([](versal_hw.md#bandwidth-of-the-ps-ddr-window)).
 
 * `loop pcs` / `t pcs` use the GT near-end PMA loopback: the GTY near-end PCS loopback does not
   hold the MRMAC's link.
 * `fec 0` / `fec 1` need the host port's FEC setting to match (`encoding off` / `Auto`).
-* PAUSE RX (the FPGA honouring PAUSE frames) is verified in the GT loopback; against a host
-  that sends PAUSE it is not characterised on this target.
+* PAUSE RX is off by default: an HSB stream requested above the host's NIC-to-GPU limit
+  (90-95 Gb/s on the test host) overruns the host unless `pause rx 1` lets the host's PAUSE
+  frames hold the board back ([](hsb.md#measured-limits-test-host)).
 
 ## 2025.2 — version 0.5.0 (2026-11-05), ZCU106 target
 

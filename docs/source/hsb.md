@@ -9,11 +9,12 @@ counter and IQ16 frames through the Linux-UDP receiver and through the RoCE rece
 memory (up to 80 Gb/s, the test host's NIC-to-GPU limit), the Holoscan application, the
 producer watchdog, the link pause and the module API. Since version 0.5.0 also on the ZCU106
 target at 40G (enumeration, registers, IQ16 and counter frames into GPU memory at 39.0 Gb/s with
-every frame checked, the beamforming demo). The VCK190 target (100G) runs the same device mode
-on its Linux image and bare-metal console. Known limitations: see [](revision_history.md).
+every frame checked, the beamforming demo). Since version 0.6.0 also on the VCK190 target at
+100G (Linux image): enumeration, registers (`LINK_GBPS` 100, `TARGET` "VCK1"), counter and IQ16
+frames into GPU memory at 72.2 and 76.1 Gb/s with every frame checked, 77.6 Gb/s without loss
+at a requested 95 Gb/s with PAUSE RX on ([below](#measured-limits-test-host)), the beamforming
+demo. Known limitations: see [](revision_history.md).
 ```
-
-% TODO(m3): HSB status on the VCK190 (enumeration, IQ16 / counter frames into GPU memory at 100G, rate measured).
 
 With `hsb on` on the console, the board behaves as a Holoscan Sensor Bridge (HSB) device for
 NVIDIA's HSB host software (version 3.0.0): the host finds it (enumeration), reads and writes
@@ -187,6 +188,17 @@ numbers belong to that host, not to the design: the board sends 97.6 Gb/s unpace
 | Module API (asynchronous only), board | 100 % at 40 Gb/s, 91.5 % at 80 Gb/s (C++ checker, 2 CPU cores); lost and consumer-dropped frames are not separable |
 | Data-plane start after an idle GPU | a 1-3 s `--start-delay` at 80 Gb/s cost 420,000-550,000 NIC discards and damaged frames: the idle GPU had dropped to its lowest PCIe link speed (Gen1) |
 | Link drop (console `link`) during 40 Gb/s | producer paused ~7 s (relink, partner link-up, 2 s grace), 0 frames lost, 1 resync |
+| RoCE receiver into GPU memory, VCK190, `--rate 90` / `95` | the host overruns (NIC discards, damaged frames), as on the KCU116 |
+| Same, VCK190, `--rate 95` with `rl pause rx 1` on the board | 77.6 Gb/s, every frame checked, 0 NIC discards: the ConnectX-6 Dx sent 802.3x PAUSE frames (55,650 in the run) and the FPGA honoured them |
+
+```{tip}
+To stream above the host's NIC-to-GPU limit without losses, let the host hold the board back:
+turn PAUSE RX on at the board (`rl pause rx 1` on the Linux images, `pause rx 1` on a console;
+it is off by default) and keep the host port's link pause on (`ethtool -A <if> rx on tx on`,
+the ConnectX-6 Dx default). The NIC then sends PAUSE frames when its receive buffer fills, and
+the stream settles at the rate the host can take instead of overrunning it. Measured on the
+VCK190 (MRMAC).
+```
 
 ## Device module (`hololink_module`)
 

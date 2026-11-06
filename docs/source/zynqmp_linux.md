@@ -97,7 +97,7 @@ token, keeps it in the browser (local storage) and sends it with every request (
 `curl -H 'X-Rocelet-Token: <secret>' http://<board>/api/status`. The token protects the web UI
 only: `rl` talks to the daemon's socket, which the `group` setting protects, and SSH has its own
 login. The other keys of `rocelet-web.conf`: `listen` (default `0.0.0.0`), `port` (80), `title`
-(the name on the page), `socket` (the daemon's socket).
+(the name on the page; default the board's host name), `socket` (the daemon's socket).
 
 ## rl0 and the engine share one address
 
