@@ -40,10 +40,12 @@ set_param board.repoPaths [get_property LOCAL_ROOT_DIR [xhub::get_xstores xilinx
 # Possible targets
 # (generated from config/data.json by config/update.py:
 #  <label> { <url> <boardname> <bdscript> <port> <fec> <selftest> { <rocelet_sys parameters> } <mac>
-#            { <GT placement: channels {<lane 0..3 sites>} refclk <clkN> | cmac_core <site>> } })
+#            { <GT placement: channels {<lane 0..3 sites>} refclk <clkN> | cmac_core <site>
+#              | quad <GT quad> mrmac_core <site> refclk_hz <Hz>> } })
 # UPDATER START
 dict set target_dict kcu116 { xilinx.com kcu116 microblaze 0 rs 1 { NUM_QP 16 NUM_MR 16 READ_DEPTH 16 MAX_WR 128 RTX_MODE RING RING_BYTES 262144 HSB_EN 1 MEM_BYTES 262144 MAC_WIDTH 512 CLK_MHZ 322 CLK_KHZ 322266 CLK_HZ 322265625 LINK_GBPS 100 } cmac { channels {X0Y12 X0Y13 X0Y14 X0Y15} cmac_core CMACE4_X0Y0 } }
 dict set target_dict zcu106 { xilinx.com zcu106 zynqmp 0 none 1 { NUM_QP 16 NUM_MR 16 READ_DEPTH 16 MAX_WR 128 RTX_MODE RING RING_BYTES 262144 HSB_EN 1 MEM_BYTES 262144 MAC_WIDTH 256 CLK_MHZ 156 CLK_KHZ 156250 CLK_HZ 156250000 LINK_GBPS 40 DDR_EN 1 DDR_PORTS 2 ODMA_EN 1 } omac_40g { channels {X0Y14 X0Y13 X0Y15 X0Y12} refclk clk0 } }
+dict set target_dict vck190_fmcp1 { xilinx.com vck190 versal 0 rs 1 { NUM_QP 16 NUM_MR 16 READ_DEPTH 16 MAX_WR 128 RTX_MODE RING RING_BYTES 262144 HSB_EN 1 MEM_BYTES 262144 MAC_WIDTH 512 CLK_MHZ 300 CLK_KHZ 300000 CLK_HZ 300000000 LINK_GBPS 100 DDR_EN 1 DDR_PORTS 1 ODMA_EN 1 DNA_EN 0 } mrmac { quad GTY_QUAD_X1Y1 mrmac_core MRMAC_X0Y0 refclk_hz 322265625 } }
 # UPDATER END
 
 # Function to display the options and get user input
@@ -130,6 +132,19 @@ set gt_cfg      [lindex $tdesc 8]
 set gt_channels [expr {[dict exists $gt_cfg channels]  ? [dict get $gt_cfg channels]  : {}}]
 set gt_refclk   [expr {[dict exists $gt_cfg refclk]    ? [dict get $gt_cfg refclk]    : "clk0"}]
 set cmac_core   [expr {[dict exists $gt_cfg cmac_core] ? [dict get $gt_cfg cmac_core] : ""}]
+# mrmac (Versal): the GT quad of the QSFP28 port (GTY_QUAD_X<x>Y<y>, placed through the
+# XDC's pin locations), the MRMAC hard block site (MRMAC_X<x>Y<y>) and the GT reference clock
+# frequency; no per-channel sites (the Versal GT quad is one primitive)
+set gt_quad     [expr {[dict exists $gt_cfg quad]       ? [dict get $gt_cfg quad]       : ""}]
+set mrmac_core  [expr {[dict exists $gt_cfg mrmac_core] ? [dict get $gt_cfg mrmac_core] : ""}]
+set gt_refclk_hz [expr {[dict exists $gt_cfg refclk_hz] ? [dict get $gt_cfg refclk_hz]  : 322265625}]
+if {$mac_type eq "mrmac"} {
+  if {![regexp {^GTY_QUAD_X[0-9]+Y[0-9]+$} $gt_quad] || ![regexp {^MRMAC_X[0-9]+Y[0-9]+$} $mrmac_core]} {
+    puts "ERROR: target $target (MAC mrmac) needs data.json gt_quad (GTY_QUAD_X<x>Y<y>) and mrmac_core (MRMAC_X<x>Y<y>), has '$gt_quad' '$mrmac_core'"
+    exit 1
+  }
+  puts "GT quad $gt_quad (QSFP lanes 0-3), MRMAC $mrmac_core, reference clock $gt_refclk_hz Hz"
+}
 proc gt_site_xy {ch} {
   if {![regexp {^X([0-9]+)Y([0-9]+)$} $ch -> x y]} {
     puts "ERROR: GT channel '$ch' (data.json gt_channels) is not of the form X<x>Y<y>"
@@ -138,7 +153,7 @@ proc gt_site_xy {ch} {
   return [list $x $y]
 }
 foreach ch $gt_channels { gt_site_xy $ch }
-if {[llength $gt_channels] == 0 || ($mac_type ne "omac_10g" && [llength $gt_channels] != 4)} {
+if {$mac_type ne "mrmac" && ([llength $gt_channels] == 0 || ($mac_type ne "omac_10g" && [llength $gt_channels] != 4))} {
   puts "ERROR: target $target (MAC $mac_type) needs [expr {$mac_type eq {omac_10g} ? {one} : {four}}] GT channel(s) in data.json gt_channels, has [llength $gt_channels]"
   exit 1
 }
@@ -174,7 +189,7 @@ if {[llength $gt_channels] == 4} {
 }
 if {$mac_type eq "cmac"} {
   puts "GT channels $gt_channels (QSFP lanes 0-3), CMAC $cmac_core, GT group $cmac_gt_group"
-} else {
+} elseif {$mac_type ne "mrmac"} {
   puts "GT channels $gt_channels (QSFP lanes 0-[expr {[llength $gt_channels] - 1}]), refclk $gt_refclk, CH_OF_LANE [format 0x%02X $ch_of_lane]"
 }
 if {$mac_type eq "cmac" && $cmac_core eq ""} {
@@ -264,6 +279,22 @@ set mac_dir [file normalize "$hdl_dir/mac"]
 switch -- $mac_type {
   cmac {
     add_src_list sources_1 [list "$mac_dir/mac_cmac_adapt.v"]
+  }
+  mrmac {
+    # Versal MRMAC (hard 100G MAC, created by bd_versal.tcl) + its adapter mac_mrmac100g
+    # (src/hdl/mac: mac_mrmac100g* and the mrmac_* parts it uses). Until the adapter lands,
+    # src/hdl/mac/stub/mac_mrmac100g_stub.sv stands in (same module name and port contract,
+    # NOT a working MAC adapter: block-design and implementation bring-up only; also forced
+    # with ROCELET_MAC_STUB=1 in the environment).
+    set mrmac_src [lsort [glob -nocomplain "$mac_dir/mac_mrmac100g*.v" "$mac_dir/mac_mrmac100g*.sv" \
+                                           "$mac_dir/mrmac_*.v" "$mac_dir/mrmac_*.sv"]]
+    set mrmac_src [lsearch -all -inline -not -glob $mrmac_src "*_tb.*"]
+    if {[lsearch -glob $mrmac_src "*/mac_mrmac100g.*"] < 0 || ([info exists ::env(ROCELET_MAC_STUB)] && $::env(ROCELET_MAC_STUB))} {
+      puts "CRITICAL WARNING: \[rocelet\] building with the STUB adapter src/hdl/mac/stub/mac_mrmac100g_stub.sv (no working MAC datapath; src/hdl/mac/mac_mrmac100g missing or ROCELET_MAC_STUB=1)"
+      set mrmac_src [list "$mac_dir/stub/mac_mrmac100g_stub.sv"]
+    }
+    add_src_list sources_1 $mrmac_src
+    puts "INFO: MRMAC adapter sources: $mrmac_src"
   }
   omac_10g {
     set omac_dir [file normalize "$repo_root/submodules/opsero-ethernet-mac"]

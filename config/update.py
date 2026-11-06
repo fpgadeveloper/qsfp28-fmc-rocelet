@@ -46,6 +46,7 @@ MAC_ATTRS = {
     "cmac":     {"link_gbps": 100, "mac_width": 512, "linkspeed": "100", "lanes": [0]},
     "omac_10g": {"link_gbps": 10,  "mac_width": 64,  "linkspeed": "10",  "lanes": [0]},
     "omac_40g": {"link_gbps": 40,  "mac_width": 256, "linkspeed": "40",  "lanes": [0]},
+    "mrmac":    {"link_gbps": 100, "mac_width": 512, "linkspeed": "100", "lanes": [0]},
 }
 
 # --mac <label>=<mac>: select one of a target's "mac_options" in data.json
@@ -157,9 +158,11 @@ def update_readme(file_path,data):
 # injectors) and the rocelet_sys parameters: the engine's ("engine": {NAME:
 # value}), the memory window size ("mem_bytes" -> MEM_BYTES), the MAC side
 # ("mac_width" -> MAC_WIDTH, "clk_khz" -> CLK_KHZ and CLK_MHZ, "clk_hz" -> CLK_HZ,
-# "link_gbps" -> LINK_GBPS) and the ZynqMP options ("ddr_window" -> DDR_EN,
+# "link_gbps" -> LINK_GBPS; Versal targets get DNA_EN 0) and the ZynqMP / Versal options ("ddr_window" -> DDR_EN,
 # "ddr_ports" -> DDR_PORTS: 1 or 2 HP ports per direction, "netdev_dma" -> ODMA_EN) to it, plus the MAC type ("mac": cmac | omac_10g | omac_40g), which
-# selects the MAC adapter sources (Vivado/src/hdl/mac) and, for omac, the MAC IP.
+# selects the MAC adapter sources (Vivado/src/hdl/mac) and, for omac, the MAC IP
+# (mrmac: the Versal MRMAC hard block, its placement { quad GTY_QUAD_X1Y1 mrmac_core
+# MRMAC_X0Y0 refclk_hz 322265625 } from "gt_quad", "mrmac_core", "gt_refclk_hz").
 # The GT placement of the QSFP28 port ({ channels {..} refclk clkN } or { channels {..}
 # cmac_core CMACE4_XnYm }) comes from "gt_channels" (the transceiver channel sites in QSFP
 # lane order 0-3, e.g. X0Y14: omac_10g uses lane 0, omac_40g and cmac all four of one quad),
@@ -168,6 +171,14 @@ def update_readme(file_path,data):
 # below) and "cmac_core" (cmac: the CMAC hard block site); build.tcl checks them.
 def gt_placement(design):
     mac = design.get('mac', 'cmac')
+    if mac == 'mrmac':
+        # Versal: the GT quad (one primitive, placed by the XDC pins), the MRMAC site and the
+        # GT reference clock frequency ("gt_quad", "mrmac_core", "gt_refclk_hz")
+        for k in ('gt_quad', 'mrmac_core'):
+            if k not in design:
+                sys.exit("ERROR: target {} (mac mrmac) needs {} in data.json".format(design['label'], k))
+        return 'quad {} mrmac_core {} refclk_hz {}'.format(
+            design['gt_quad'], design['mrmac_core'], design.get('gt_refclk_hz', 322265625))
     chans = design.get('gt_channels', [])
     need = 1 if mac == 'omac_10g' else 4
     if len(chans) < need or (need == 4 and len(chans) != 4):
@@ -203,6 +214,8 @@ def get_vivado_build_targets(data):
             params['DDR_PORTS'] = design['ddr_ports']
         if design.get('netdev_dma', False):
             params['ODMA_EN'] = 1
+        if design.get('bdscript') == 'versal':
+            params['DNA_EN'] = 0     # no DNA_PORTE2 in the Versal PL
         eng = ' '.join('{} {}'.format(k, v) for k, v in params.items())
         target = 'dict set target_dict {} {{ {} {} {} {} {} {} {{ {} }} {} {{ {} }} }}'.format(
             design['label'], design['url'], design['boardname'], design['bdscript'], port,

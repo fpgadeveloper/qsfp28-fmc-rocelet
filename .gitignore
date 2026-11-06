@@ -76,6 +76,8 @@ local/
 Vivado/kcu116/
 Vivado/zcu106/
 Yocto/zcu106/
+Vivado/vck190_fmcp1/
+Yocto/vck190_fmcp1/
 # UPDATER END
 
 # Sphinx output

@@ -151,8 +151,15 @@ git clone --recursive https://github.com/fpgadeveloper/qsfp28-fmc-rocelet.git
 |-----------------------|--------------------|-------------|-------------|-------------|-------|-------|-------|
 | [ZCU106]              | `zcu106`           | 1x 40G (10G option) | None        | HPC0        | :white_check_mark: | :white_check_mark: | Standard :free: |
 
+### Versal designs
+
+| Target board          | Target design      | Ports       | FEC         | FMC Slot(s) | Standalone<br> console | Linux<br> (Yocto) | Vivado<br> Edition |
+|-----------------------|--------------------|-------------|-------------|-------------|-------|-------|-------|
+| [VCK190]              | `vck190_fmcp1`     | 1x 100G     | RS-FEC (CL91) | FMCP1       | :white_check_mark: | :white_check_mark: | Enterprise |
+
 [KCU116]: https://www.xilinx.com/kcu116
 [ZCU106]: https://www.xilinx.com/zcu106
+[VCK190]: https://www.xilinx.com/vck190
 <!-- updater end -->
 
 ## Build

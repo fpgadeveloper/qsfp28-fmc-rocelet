@@ -9,6 +9,7 @@
 #
 # Outputs (where build.py / make-boot.py expect them):
 #   <target>/<target>.runs/impl_1/rocelet_wrapper.bit / .mmi / routed.dcp
+#     (Versal: rocelet_wrapper.pdi = the device image, no .bit / .mmi; reports/noc_qos.rpt)
 #   <target>/rocelet_wrapper.xsa
 #   <target>/reports/ : utilisation (flat + hierarchical), timing, RAM, clocks
 #*****************************************************************************************
@@ -27,6 +28,7 @@ set_param general.maxThreads [expr {$jobs > 8 ? 8 : $jobs}]
 
 open_project $origin_dir/$design_name/$design_name.xpr
 set part [get_property PART [current_project]]
+set versal [string match -nocase "*versal*" [get_property ARCHITECTURE [get_parts $part]]]
 set impl_dir [file normalize "$origin_dir/$design_name/$design_name.runs/impl_1"]
 set rpt_dir  [file normalize "$origin_dir/$design_name/reports"]
 file mkdir $impl_dir
@@ -75,9 +77,15 @@ puts $fh "target $target WNS $wns WHS $whs"
 close $fh
 stamp "timing WNS $wns WHS $whs"
 
-stamp "write_bitstream"
-write_bitstream -force $impl_dir/${block_name}_wrapper.bit
-write_mem_info -force $impl_dir/${block_name}_wrapper.mmi
+if {$versal} {
+  report_noc_qos -file $rpt_dir/noc_qos.rpt
+  stamp "write_device_image"
+  write_device_image -force $impl_dir/${block_name}_wrapper.pdi
+} else {
+  stamp "write_bitstream"
+  write_bitstream -force $impl_dir/${block_name}_wrapper.bit
+  write_mem_info -force $impl_dir/${block_name}_wrapper.mmi
+}
 
 stamp "write_hw_platform"
 # The bitstream must be inside the XSA for the Linux flows (sdtgen extracts it for BOOT.BIN).
