@@ -79,8 +79,7 @@ stamp "timing WNS $wns WHS $whs"
 
 if {$versal} {
   report_noc_qos -file $rpt_dir/noc_qos.rpt
-  stamp "write_device_image"
-  write_device_image -force $impl_dir/${block_name}_wrapper.pdi
+  # the device image is written from routed.dcp with the XSA below
 } else {
   stamp "write_bitstream"
   write_bitstream -force $impl_dir/${block_name}_wrapper.bit
@@ -93,7 +92,18 @@ stamp "write_hw_platform"
 # this in-process flow never launches ("Unable to get BIT file from implementation run"), so
 # export from the routed checkpoint instead (non-project: the in-memory design's bitstream).
 set xsa_file [file normalize $origin_dir/$design_name/${block_name}_wrapper.xsa]
-if {[catch {write_hw_platform -fixed -include_bit -force -file $xsa_file} err]} {
+if {$versal} {
+  # Versal: project-mode write_hw_platform does not see the in-process device image and
+  # packs the PRE-SYNTHESIS PDI (PLM + PS CDOs only: no PL, no NoC / DDRMC). The Yocto
+  # BOOT.BIN built from such an XSA has no pl_cfi image and the PLM hangs loading the
+  # first DDR partition. Export from the routed checkpoint, after writing its device
+  # image in that session, so the XSA carries the post-implementation PDI. -include_bit is
+  # needed here although Vivado warns it is not (1-5564): without it the XSA is pre-synth again.
+  close_project
+  open_checkpoint $impl_dir/routed.dcp
+  write_device_image -force $impl_dir/${block_name}_wrapper.pdi
+  write_hw_platform -fixed -include_bit -force -file $xsa_file
+} elseif {[catch {write_hw_platform -fixed -include_bit -force -file $xsa_file} err]} {
   puts "INFO: project-mode write_hw_platform -include_bit unavailable; exporting from routed.dcp"
   close_project
   open_checkpoint $impl_dir/routed.dcp
