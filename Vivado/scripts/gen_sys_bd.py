@@ -11,7 +11,7 @@ out=sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.path.dirname(os.path.a
 params=[("NUM_QP",16),("NUM_MR",16),("READ_DEPTH",16),("RTX_MODE",0,"0 RING, 1 REREAD, 2 LOSSY"),("RING_BYTES",262144),
 ("MAX_WR",128),("RX_ICRC_EN",1),("ICRC_SHARE",1),("HSB_EN",1),("SELFTEST",1),("RSFEC",1),("MEM_BYTES",262144),
 ("MAC_WIDTH",512,"MAC AXI-Stream width: 64 (omac_10g), 256 (omac_40g), 512 (CMAC)"),("CLK_MHZ",322),("CLK_KHZ",322266),
-("LINK_GBPS",100),("CLK_HZ",322265625,"exact MAC clock (HSB producer time base)"),("DDR_EN",0,"PS DDR window masters"),("DDR_PORTS",1,"PS DDR masters per direction: 1, or 2 (address-interleaved)"),("ODMA_EN",0,"netdev DMA channel")]
+("LINK_GBPS",100),("CLK_HZ",322265625,"exact MAC clock (HSB producer time base)"),("DDR_EN",0,"PS DDR window masters"),("DDR_PORTS",1,"PS DDR masters per direction: 1, or 2 (address-interleaved)"),("ODMA_EN",0,"netdev DMA channel"),("DNA_EN",1,"device DNA from DNA_PORTE2 (0 on Versal)")]
 L=[]
 w=L.append
 w("""// SPDX-License-Identifier: MIT
@@ -110,7 +110,7 @@ w("rocelet_sys #(")
 pl=[]
 for p in params:
     n=p[0]
-    if n in ("RX_ICRC_EN","ICRC_SHARE","HSB_EN","SELFTEST","RSFEC","DDR_EN","ODMA_EN"): pl.append(f".{n}({n} != 0)")
+    if n in ("RX_ICRC_EN","ICRC_SHARE","HSB_EN","SELFTEST","RSFEC","DDR_EN","ODMA_EN","DNA_EN"): pl.append(f".{n}({n} != 0)")
     else: pl.append(f".{n}({n})")
 for i in range(0,len(pl),6): w("    "+", ".join(pl[i:i+6])+("," if i+6<len(pl) else ""))
 w(") u_sys (")

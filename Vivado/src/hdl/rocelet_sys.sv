@@ -79,7 +79,9 @@ module rocelet_sys
     parameter int          DDR_BIT      = 39,      // local address bit that selects PS DDR
     parameter int          DDR_PORTS    = 1,       // PS DDR masters per direction: 1, or 2 (interleaved)
     parameter int          ILV_BIT      = 9,       // DDR_PORTS 2: interleave granule 2^ILV_BIT bytes
-    parameter bit          ODMA_EN      = 1'b0     // netdev DMA channel (m_axis_orx / s_axis_otx)
+    parameter bit          ODMA_EN      = 1'b0,    // netdev DMA channel (m_axis_orx / s_axis_otx)
+    // device
+    parameter bit          DNA_EN       = 1'b1     // device DNA from DNA_PORTE2 (0 on Versal: no PL DNA port)
 ) (
     input  wire logic          clk,
     input  wire logic          gen_clk,        // 200 MHz: IQ16 / beam generators, device DNA (asynchronous to clk)
@@ -612,7 +614,7 @@ rsys_ptime #(.CLK_HZ(CLK_HZ)) u_ptime (.clk(clk), .rst(regs_rst), .t_s(t_s), .t_
 
 wire logic [95:0] dna;
 wire logic        dna_valid;
-rsys_dna u_dna (.gen_clk(gen_clk), .g_rst(g_rst), .clk(clk), .dna(dna), .valid(dna_valid));
+rsys_dna #(.DNA_EN(DNA_EN)) u_dna (.gen_clk(gen_clk), .g_rst(g_rst), .clk(clk), .dna(dna), .valid(dna_valid));
 
 wire logic         iq_valid, iq_pop, iq_pending, iq_enable, iq_start;
 wire logic [511:0] iq_data;

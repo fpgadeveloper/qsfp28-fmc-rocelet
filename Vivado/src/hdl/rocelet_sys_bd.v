@@ -32,7 +32,8 @@ module rocelet_sys_bd #(
     parameter integer CLK_HZ     = 322265625,   // exact MAC clock (HSB producer time base)
     parameter integer DDR_EN     = 0,   // PS DDR window masters
     parameter integer DDR_PORTS  = 1,   // PS DDR masters per direction: 1, or 2 (address-interleaved)
-    parameter integer ODMA_EN    = 0   // netdev DMA channel
+    parameter integer ODMA_EN    = 0,   // netdev DMA channel
+    parameter integer DNA_EN     = 1   // device DNA from DNA_PORTE2 (0 on Versal)
 )(
     (* X_INTERFACE_INFO = "xilinx.com:signal:clock:1.0 clk CLK" *)
     (* X_INTERFACE_PARAMETER = "ASSOCIATED_BUSIF S_AXIL:S_AXIS_RX:M_AXIS_TX:M_AXI_DDRW:M_AXI_DDRR:M_AXI_DDRW1:M_AXI_DDRR1" *)
@@ -241,7 +242,7 @@ rocelet_sys #(
     .NUM_QP(NUM_QP), .NUM_MR(NUM_MR), .READ_DEPTH(READ_DEPTH), .RTX_MODE(RTX_MODE), .RING_BYTES(RING_BYTES), .MAX_WR(MAX_WR),
     .RX_ICRC_EN(RX_ICRC_EN != 0), .ICRC_SHARE(ICRC_SHARE != 0), .HSB_EN(HSB_EN != 0), .SELFTEST(SELFTEST != 0), .RSFEC(RSFEC != 0), .MEM_BYTES(MEM_BYTES),
     .MAC_WIDTH(MAC_WIDTH), .CLK_MHZ(CLK_MHZ), .CLK_KHZ(CLK_KHZ), .LINK_GBPS(LINK_GBPS), .CLK_HZ(CLK_HZ), .DDR_EN(DDR_EN != 0),
-    .DDR_PORTS(DDR_PORTS), .ODMA_EN(ODMA_EN != 0)
+    .DDR_PORTS(DDR_PORTS), .ODMA_EN(ODMA_EN != 0), .DNA_EN(DNA_EN != 0)
 ) u_sys (
     .clk(clk), .gen_clk(gen_clk), .dma_clk(dma_clk), .sys_rst(sys_rst), .irq(irq),
     .evt(evt), .s_axil_awaddr(s_axil_awaddr), .s_axil_awvalid(s_axil_awvalid), .s_axil_awready(s_axil_awready), .s_axil_wdata(s_axil_wdata),
