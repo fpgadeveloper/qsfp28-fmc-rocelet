@@ -1,0 +1,146 @@
+// SPDX-License-Identifier: MIT
+// Copyright (C) 2026, Opsero Electronic Design Inc.  All rights reserved.
+
+/*
+ * qsfp28-fmc-rocelet, VCK190 (vck190_fmcp1): fixups layered on the gen-machineconf / lopper
+ * generated cortexa72-linux.dts (Linux domain only, see device-tree.bbappend). The SDT (from the
+ * XSA) carries the CIPS and the PL cores of the block design (Vivado/src/bd/bd_versal.tcl), all on
+ * CIPS M_AXI_LPD: rsys_aon_0 (always-on block + clock guard in front of rocelet_sys, 1 MB at
+ * 0x8000_0000, pl_ps_irq0), axi_iic_clk (Si5328, 0x8010_0000), axi_iic_qsfp0 (QSFP28 port 0,
+ * 0x8011_0000), axi_dma_0 (netdev channel, 0x8012_0000), mrmac_0 (0x8013_0000) and the GT quad's
+ * APB bridge (0x8014_0000, no Linux node needed). Register map: docs (Versal hardware page).
+ *
+ * Labels this file depends on (lopper names a node after its block-design cell): gem0, gem1,
+ * i2c0, versal_sec_cfg, rsys_aon_0, mrmac_0, axi_dma_0, dma_channel_80120030.
+ */
+
+/* PS GEM0 / GEM1 (board RJ45s; GEM0 = the jack next to the USB connector): the SDT flow does not
+ * describe the board's TI DP83867 PHYs, so Linux would use the Generic PHY driver and never
+ * program the RGMII delays (link up, no packets). Both PHYs sit on GEM0's MDIO bus. Values from
+ * versal-vmk180-revA.dts. Fixed MACs: the Opsero bench addresses of the VCK190 (stable DHCP
+ * lease; rl0 below takes + 2); change them for a board on your own network.
+ */
+&gem0 {
+	local-mac-address = [00 0a 35 06 21 90];
+	phy-handle = <&gem0_phy>;
+	mdio {
+		#address-cells = <1>;
+		#size-cells = <0>;
+		gem0_phy: ethernet-phy@1 {
+			compatible = "ethernet-phy-id2000.a231";
+			reg = <1>;
+			ti,rx-internal-delay = <0xb>;
+			ti,tx-internal-delay = <0xa>;
+			ti,fifo-depth = <0x1>;
+			ti,dp83867-rxctrl-strap-quirk;
+		};
+		gem1_phy: ethernet-phy@2 {
+			compatible = "ethernet-phy-id2000.a231";
+			reg = <2>;
+			ti,rx-internal-delay = <0xb>;
+			ti,tx-internal-delay = <0xa>;
+			ti,fifo-depth = <0x1>;
+			ti,dp83867-rxctrl-strap-quirk;
+		};
+	};
+};
+
+&gem1 {
+	local-mac-address = [00 0a 35 06 21 91];
+	phy-handle = <&gem1_phy>;
+};
+
+/* LPD I2C0 (ff020000): the board's PMBus / FMC power tree, among it the TCA9548 at 0x74 and,
+ * behind it, the IR38164 at 0x1E that makes VADJ_FMC. roceletd drives the mux and the regulator
+ * itself through i2c-dev (vadj.c: idempotent 1.5 V enable at start-up; U-Boot does the same before
+ * every boot), so no mux node is declared: a pca954x driver would own the mux and hide 0x1E. */
+&i2c0 {
+	status = "okay";
+};
+
+/* The PMC eFUSE cache through the PLM (xilinx-secure-config nvmem device, CONFIG_XLNX_SEC_CFG):
+ * roceletd reads the device DNA there (the board's serial on the console and the web UI). */
+&versal_sec_cfg {
+	status = "okay";
+};
+
+/* The rocelet register window (engine +0x0, system +0x1_0000, URAM +0x4_0000, always-on registers
+ * +0x8_0000) for roceletd: generic UIO (the systemd-boot entry passes
+ * uio_pdrv_genirq.of_id=generic-uio), named rocelet-regs (udev: /dev/rocelet-regs), with the
+ * always-on block's aggregated interrupt: CIPS pl_ps_irq0 = GIC SPI 84 (0x54), stated here in case
+ * the SDT leaves it out (the same value lopper emits). Every access is answered OKAY by the clock
+ * guard, so a user-space mapping cannot raise an SError.
+ */
+&rsys_aon_0 {
+	compatible = "generic-uio";
+	linux,uio-name = "rocelet-regs";
+	interrupt-parent = <&gic>;
+	interrupts = <0x0 0x54 0x4>;
+};
+
+/* The MRMAC (1x100GE, MRMAC_X0Y0): its registers belong to roceletd (mac.c: mode, RS-FEC, MTU,
+ * PAUSE, status; UIO rocelet-mrmac, udev /dev/rocelet-mrmac). The MAC's frames go to the rocelet
+ * engine, not to an AXI DMA, so the stock axienet driver (which binds xlnx,mrmac-ethernet-1.0)
+ * must not touch it: generic UIO, no interrupt. reg = the whole 64 KB block of the address map
+ * (the SDT gives one 4 KB port page). */
+&mrmac_0 {
+	compatible = "generic-uio";
+	linux,uio-name = "rocelet-mrmac";
+	reg = <0x0 0x80130000 0x0 0x10000>;
+	/delete-property/ interrupts;
+	/delete-property/ interrupt-names;
+	/delete-property/ interrupt-parent;
+};
+
+/ {
+	/* The engine's PS DDR window (C_DDR_BASE / C_DDR_SIZE, one 256 MB region in the DDR4 DIMM's
+	 * low 2 GB, reached through the NoC): kept out of the kernel's memory map, so the PL masters
+	 * own it. roceletd maps it through the UIO device below (uncached: no cache maintenance,
+	 * aligned accesses only) and gives the engine its physical address. Clear of every fixed
+	 * EDF boot address (PLM DTB 0x1000, kernel 0x20_0000, ramdisk 0x210_0000, U-Boot 0x800_0000,
+	 * pxe 0x1000_0000, boot script 0x2000_0000, kernel_comp 0x3000_0000-0x33BF_FFFF; U-Boot
+	 * relocates below 0x8000_0000 and its EFI / LMB allocators honour this reserved node). */
+	reserved-memory {
+		#address-cells = <2>;
+		#size-cells = <2>;
+		ranges;
+		rocelet_ddr_mem: rocelet-ddr@60000000 {
+			reg = <0x0 0x60000000 0x0 0x10000000>;
+			no-map;
+		};
+	};
+
+	rocelet_ddr: rocelet-ddr@60000000 {
+		compatible = "generic-uio";
+		reg = <0x0 0x60000000 0x0 0x10000000>;
+		linux,uio-name = "rocelet-ddr";
+	};
+
+	/* rl0: the Linux network interface of QSFP28 port 0 (sw/linux/rl-net, rl_net.ko). Every frame
+	 * the engine does not terminate (not RoCE v2 UDP 4791) reaches Linux through the AXI DMA's S2MM
+	 * channel, Linux's frames leave through MM2S. reg = the always-on registers (link status for the
+	 * carrier, read only). MAC: the bench MAC of the VCK190 + 2 (GEM0 + 0, GEM1 + 1); change it
+	 * with the GEM addresses. */
+	rocelet_net: rocelet-net@80080000 {
+		compatible = "opsero,rocelet-net-1.0";
+		reg = <0x0 0x80080000 0x0 0x100>;
+		dmas = <&axi_dma_0 0>, <&axi_dma_0 1>;
+		dma-names = "tx", "rx";
+		local-mac-address = [00 0a 35 06 21 92];
+	};
+};
+
+/* The AXI DMA masters reach the whole Linux memory through the NoC (DDR4 2 GB at 0x0 + 6 GB at
+ * 0x500_0000_0000): 64-bit addressing (c_addr_width 64). xilinx_dma sets the DMA mask from this
+ * property, and rl_net maps its buffers against the DMA device; stated here in case the SDT gives
+ * the IP's default. */
+&axi_dma_0 {
+	xlnx,addrwidth = <0x40>;
+};
+
+/* rl_net keeps many RX buffers queued on S2MM; xilinx_dma sets the interrupt-coalescing threshold to
+ * the number of queued descriptors, so the delay timer (1 = 125 SG clocks) must raise the IRQ after
+ * every burst. It is read with of_property_read_u8(): an 8-bit value. */
+&dma_channel_80120030 {
+	xlnx,irq-delay = /bits/ 8 <1>;
+};

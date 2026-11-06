@@ -1,0 +1,24 @@
+# Copyright (C) 2026, Opsero Electronic Design Inc.  All rights reserved.
+#
+# SPDX-License-Identifier: MIT
+
+# qsfp28-fmc-rocelet, VCK190 (vck190_fmcp1): AMD EDF Yocto image, Linux on the A72 (parse-sdt flow,
+# Yocto/scripts/configure-build.sh: MACHINE rocelet-vck190_fmcp1 is generated from the Vivado XSA).
+# The PDI (PLM, NoC / DDR4 controller, PL) goes into BOOT.BIN; U-Boot switches the FMC VADJ on
+# (meta-user/recipes-bsp/u-boot/files/vck190-vadj-bootcmd.cfg), then boots systemd-boot (EFI) from
+# the esp. The MRMAC and the GT stay in reset until roceletd has programmed the FMC's Si5328.
+#
+# Kernel command line: on Versal it is the `options` line of the EDF systemd-boot entry
+# (loader/entries/edf-linux.conf: console=ttyAMA0 earlycon=pl011,... root=PARTUUID=... ro rootwait
+# uio_pdrv_genirq.of_id=generic-uio); BSP_EXTRA_BOOTARGS is appended to it by
+# meta-user/recipes-core/systemd/systemd-bootconf-edf_%.bbappend. clk_ignore_unused: the PL
+# clocks (pl0_ref) feed blocks that only UIO sees (rsys_aon, MRMAC), which hold no clock reference,
+# so Linux must not gate them as unused. The engine's DDR window is a reserved-memory carve-out in
+# the device tree (256 MB at 0x6000_0000, system-user.dtsi), not CMA: the default CMA is kept.
+BSP_EXTRA_BOOTARGS = "clk_ignore_unused"
+
+# meta-amd-edf's distro conf sets hostname:pn-base-files:amd-edf; :forcevariable outranks it.
+hostname:pn-base-files:forcevariable = "rocelet-v190"
+
+# Room in the rootfs for the tools installed at image time.
+IMAGE_ROOTFS_EXTRA_SPACE = "524288"
