@@ -42,7 +42,11 @@ int  plat_dna(u32 dna[4]) { (void)dna; return 0; }     /* the PL reads its DNA (
 #elif defined(__aarch64__) || defined(__arm__)
 /* ---------------- Cortex-A53 (ZynqMP) / Cortex-A72 (Versal) standalone: PS UART, generic timer ---------------- */
 #include <string.h>
+#if defined(BOARD_VCK190)
+#include "xuartpsv_hw.h"              /* Versal PS UART = PL011 (uartpsv), not the ZynqMP Cadence UART */
+#else
 #include "xuartps_hw.h"
+#endif
 #include "xiltimer.h"                 /* XTime_GetTime, COUNTS_PER_SECOND (SDT BSP) */
 #include "xil_cache.h"
 #include "xil_printf.h"
@@ -55,8 +59,13 @@ void plat_init(void)
 {
 	/* UART0 runs at 115200 8N1 from the FSBL (ZynqMP) / PLM (Versal) and the BSP; nothing else */
 }
+#if defined(BOARD_VCK190)
+int  plat_rx_ready(void) { return XUartPsv_IsReceiveData(STDIN_BASEADDRESS) ? 1 : 0; }
+char plat_rx_byte(void)  { return (char)(XUartPsv_ReadReg(STDIN_BASEADDRESS, XUARTPSV_UARTDR_OFFSET) & 0xFFu); }
+#else
 int  plat_rx_ready(void) { return XUartPs_IsReceiveData(STDIN_BASEADDRESS) ? 1 : 0; }
 char plat_rx_byte(void)  { return (char)XUartPs_ReadReg(STDIN_BASEADDRESS, XUARTPS_FIFO_OFFSET); }
+#endif
 u32  plat_ticks(void)
 {
 	XTime t;
