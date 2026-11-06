@@ -40,6 +40,7 @@
 #include "xil_io.h"
 #include "xil_printf.h"
 #include "xiic_l.h"
+#include "board.h"
 #include "plat.h"
 #include "plat_linux.h"
 
@@ -470,9 +471,35 @@ int plat_pi2c_read_reg(UINTPTR base, u8 addr, u8 reg, u8 *val)
 /* ---------------------------------------------------------------- device DNA */
 /* Versal: xilinx-secure-config (drivers/nvmem/xlnx_secure_config.c) reads the eFUSE cache through
  * the PLM (PM_EFUSE_READ_VERSAL) at nvmem offset 0x1_0000 | cache offset; DNA_0..3 = cache
- * 0x20..0x2C. ZynqMP / no such device: none (the PL reads the DNA there) */
+ * 0x20..0x2C. Where that read is refused (EOPNOTSUPP on the EDF 2025.2 image) the VCK190 build
+ * reads the eFUSE cache itself through /dev/mem (PMC EFUSE_CACHE 0xF125_0000 + 0x20, as the
+ * bare-metal console does; roceletd runs as root). ZynqMP / no such device: none (the PL reads
+ * the DNA there) */
 #define SEC_CFG_EFUSE   0x10000u
 #define EFUSE_CACHE_DNA 0x20u
+#define EFUSE_CACHE_PA  0xF1250000u
+
+static int dna_valid(const u32 d[4])
+{
+	u32 all = d[0] | d[1] | d[2] | d[3], any = ~d[0] | ~d[1] | ~d[2] | ~d[3];
+	return all && any;
+}
+
+#if defined(BOARD_VCK190)
+static int dna_devmem(u32 d[4])
+{
+	int fd = open("/dev/mem", O_RDONLY | O_SYNC | O_CLOEXEC);
+	if (fd < 0) { dlog("roceletd: /dev/mem: %s", strerror(errno)); return 0; }
+	long pg = sysconf(_SC_PAGESIZE);
+	volatile u32 *m = mmap(NULL, (size_t)pg, PROT_READ, MAP_SHARED, fd, EFUSE_CACHE_PA);
+	close(fd);
+	if (m == MAP_FAILED) { dlog("roceletd: /dev/mem eFUSE cache: %s", strerror(errno)); return 0; }
+	for (int i = 0; i < 4; i++) d[i] = m[EFUSE_CACHE_DNA / 4 + i];
+	munmap((void *)m, (size_t)pg);
+	return dna_valid(d);
+}
+#endif
+
 int plat_dna(u32 dna[4])
 {
 	static u32 d[4];
@@ -488,17 +515,28 @@ int plat_dna(u32 dna[4])
 			int fd = open(p, O_RDONLY | O_CLOEXEC);
 			if (fd < 0) { dlog("roceletd: %s: %s", p, strerror(errno)); continue; }
 			ssize_t r = pread(fd, d, sizeof(d), SEC_CFG_EFUSE | EFUSE_CACHE_DNA);
+			int err = errno;
 			close(fd);
-			u32 all = d[0] | d[1] | d[2] | d[3], any = ~d[0] | ~d[1] | ~d[2] | ~d[3];
-			if (r == (ssize_t)sizeof(d) && all && any) {
+			if (r == (ssize_t)sizeof(d) && dna_valid(d)) {
 				state = 1;
 				dlog("roceletd: device DNA 0x%08x_%08x_%08x_%08x (%s)", d[3], d[2], d[1], d[0], e->d_name);
 			} else {
-				dlog("roceletd: %s: no device DNA (read %zd bytes)", p, r);
+				dlog("roceletd: %s: no device DNA (read %zd bytes%s%s)", p, r,
+				     r < 0 ? ": " : "", r < 0 ? strerror(err) : "");
 			}
 			break;
 		}
 		if (dir) closedir(dir);
+#if defined(BOARD_VCK190)
+		if (state < 0) {
+			memset(d, 0, sizeof(d));
+			if (dna_devmem(d)) {
+				state = 1;
+				dlog("roceletd: device DNA 0x%08x_%08x_%08x_%08x (/dev/mem eFUSE cache 0x%08x)",
+				     d[3], d[2], d[1], d[0], EFUSE_CACHE_PA + EFUSE_CACHE_DNA);
+			}
+		}
+#endif
 	}
 	if (state < 0) return 0;
 	memcpy(dna, d, sizeof(d));
