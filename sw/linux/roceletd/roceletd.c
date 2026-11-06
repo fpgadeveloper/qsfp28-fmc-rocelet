@@ -1,10 +1,13 @@
 /*
- * roceletd - the qsfp28-fmc-rocelet control plane on Linux (ZCU106, Zynq UltraScale+ PS).
+ * roceletd - the qsfp28-fmc-rocelet control plane on Linux (ZCU106 Zynq UltraScale+ A53, VCK190 Versal
+ * A72).
  *
  * One daemon owns the hardware: the register window and the PS DDR window through UIO, the FMC's
  * Si5328 and the QSFP28 module through i2c-dev. It runs the same console sources as the standalone
  * builds (Vitis/common/src: bring-up, engine setup, every console command, the self-test, the HSB
  * device mode) through a Linux platform layer (plat_linux.c), and serves:
+ *  - on the VCK190 also the FMC VADJ rail (PS I2C, vadj.c) and the MRMAC's registers (UIO
+ *    rocelet-mrmac);
  *  - the console on a Unix socket (/run/rocelet/roceletd.sock): the CLI rl, the web UI. Commands
  *    run one at a time, in the daemon, so a dropped SSH session never leaves a test half done;
  *  - the HSB control plane (when 'hsb on') as UDP sockets on rl0 (hsb_net.c);
@@ -17,7 +20,8 @@
  *
  * Usage: roceletd [-c file]... [-f] [-s socket] [-i iface]
  *   -c  configuration file (key = value; later files override): iface, hsb (on|off at start),
- *       socket, group, regs_uio, ddr_uio
+ *       socket, group, regs_uio, ddr_uio, extra_uio (further register blocks, comma separated:
+ *       rocelet-mrmac by default; absent devices are skipped)
  *
  * Copyright (c) 2026 Opsero Electronic Design Inc.
  * SPDX-License-Identifier: MIT
@@ -63,8 +67,9 @@ static struct {
 	char group[64];
 	char regs_uio[128];
 	char ddr_uio[64];
+	char extra_uio[128];
 	int  hsb;
-} cfg = { "rl0", RLD_SOCKET, "rocelet", "rocelet-regs,rsys_aon_bd", "rocelet-ddr", 0 };
+} cfg = { "rl0", RLD_SOCKET, "rocelet", "rocelet-regs,rsys_aon_bd", "rocelet-ddr", "rocelet-mrmac", 0 };
 
 static void trim(char *s)
 {
@@ -94,6 +99,7 @@ static void cfg_load(const char *path)
 		else if (!strcmp(k, "group")) snprintf(cfg.group, sizeof(cfg.group), "%s", v);
 		else if (!strcmp(k, "regs_uio")) snprintf(cfg.regs_uio, sizeof(cfg.regs_uio), "%s", v);
 		else if (!strcmp(k, "ddr_uio")) snprintf(cfg.ddr_uio, sizeof(cfg.ddr_uio), "%s", v);
+		else if (!strcmp(k, "extra_uio")) snprintf(cfg.extra_uio, sizeof(cfg.extra_uio), "%s", v);
 		else if (!strcmp(k, "hsb")) cfg.hsb = !strcmp(v, "on") || !strcmp(v, "1") || !strcmp(v, "yes");
 		else if (*k) dlog("roceletd: %s: unknown key '%s'", path, k);
 	}
@@ -514,6 +520,12 @@ int main(int argc, char **argv)
 	int ls = ctl_listen();                  /* first: clients wait while the hardware comes up */
 	if (ls < 0) return 1;
 	if (plat_linux_open(cfg.regs_uio, cfg.ddr_uio, 30) != 0) return 1;
+	plat_linux_map(cfg.extra_uio);          /* VCK190: the MRMAC registers (rocelet-mrmac) */
+#if defined(MAC_MRMAC)
+	if (Xil_In32(MRMAC_BASE) == 0xFFFFFFFFu)
+		dlog("roceletd: WARNING: the MRMAC registers (0x%08x) are not mapped: UIO %s missing from the device tree",
+		     MRMAC_BASE, cfg.extra_uio);
+#endif
 
 	/* the engine takes rl0's addresses from the start (else the bare-metal defaults) */
 	for (int t = 0; t < 50 && !net_present(); t++) usleep(100000);

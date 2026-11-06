@@ -475,7 +475,7 @@ void console_init(void)
 	xil_printf("qsfp28-fmc-rocelet console %s: rocelet RoCE v2 on " TARGET_NAME " + 2x QSFP28 FMC (%s, %s"
 		   " %u Gb/s)\r\n", VERSION, plat_cpu(), MAC_NAME, LINK_GBPS);
 	xil_printf("----------------------------------------------------------------\r\n");
-#if defined(MAC_OMAC)
+#if defined(HAS_AON)
 	{
 		u32 id = aon_rd(AON_ID);
 		if (id != 0x52414F4Eu) xil_printf("ERROR: always-on block not found at 0x%08x (ID 0x%08x)\r\n", AON_REGS, id);
@@ -487,6 +487,10 @@ void console_init(void)
 	xil_printf("host NIC: QSFP28 port forced to %u Gb/s, auto-negotiation off, FEC off, MTU >= 4200 (ConnectX-6 Dx:\r\n"
 		   "  ethtool -s <if> speed %u000 duplex full autoneg off; ethtool --set-fec <if> encoding off)\r\n",
 		   LINK_GBPS, LINK_GBPS);
+#elif defined(MAC_MRMAC)
+	xil_printf("host NIC: QSFP28 port forced to 100 Gb/s, auto-negotiation off, FEC RS (ConnectX-6 Dx:\r\n"
+		   "  ethtool -s <if> speed 100000 duplex full autoneg off; ethtool --set-fec <if> encoding rs;\r\n"
+		   "  'fec 0' here needs 'encoding off' there)\r\n");
 #endif
 	if (mac_bringup(g_fec, g_loop) != 0)
 		xil_printf("WARNING: link not up ('loop pma' runs the self-test without a cable)\r\n");

@@ -6,7 +6,7 @@
 # the compatibility headers in compat/; plat.c (standalone only) is replaced by plat_linux.c.
 #
 #   make                       native or cross build (CC from the environment: Yocto, an SDK)
-#   make BOARD=ZCU106 LINE_RATE=40     (Yocto: from config/data.json, rocelet-tools.bb)
+#   make BOARD=ZCU106 LINE_RATE=40     (Yocto: from config/data.json, rocelet-tools.bb; VCK190 100)
 #   make install DESTDIR=... BINDIR=/usr/bin
 
 REPO      ?= $(abspath $(CURDIR)/../../..)
@@ -21,7 +21,7 @@ CFLAGS    ?= -O2 -g
 override CFLAGS += -Wall -Wno-unused-parameter -std=gnu11 -DPLAT_LINUX=1
 override CPPFLAGS += -I$(CURDIR)/build -I$(CURDIR) -I$(CURDIR)/compat -I$(CONSOLE) -I$(ROCELET_SW)
 
-CONSOLE_SRC := main.c eng.c mac.c sysif.c selftest.c hsb.c si5328.c util.c
+CONSOLE_SRC := main.c eng.c mac.c sysif.c selftest.c hsb.c si5328.c util.c vadj.c
 DAEMON_SRC  := roceletd.c plat_linux.c hsb_net.c
 OBJ := $(addprefix build/,$(CONSOLE_SRC:.c=.o) $(DAEMON_SRC:.c=.o))
 

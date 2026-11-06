@@ -15,6 +15,9 @@
 /* map the register window (UIO named regs_name, waits up to wait_s seconds for it); the PS DDR
  * window carve-out (UIO ddr_name) is mapped by plat_ddr_init(). 0 = ok */
 int  plat_linux_open(const char *regs_name, const char *ddr_name, int wait_s);
+/* map further register blocks: the UIO devices named in names (comma separated; absent ones are
+ * skipped), every map of each; returns the number of windows added */
+int  plat_linux_map(const char *names);
 int  plat_regs_fd(void);                   /* the register window's UIO fd (interrupt) */
 u32  plat_regs_size(void);
 

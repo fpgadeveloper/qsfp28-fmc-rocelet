@@ -111,15 +111,34 @@ static u32 build_date(void)
 	return (yr << 16) | ((u32)(mo / 10 * 16 + mo % 10) << 8) | day;
 }
 
-/* serial number: the 96-bit device DNA folded to 56 bits, DNA[55:0] ^ DNA[95:56], big-endian;
- * without a DNA (not read yet): 0x00 + the MAC address (status bit "hardware serial" = 0) */
-static void make_serial(void)
+/* serial number: the device DNA folded to 56 bits by XOR of its 56-bit pieces, big-endian:
+ * DNA[55:0] ^ DNA[111:56] ^ DNA[127:112] (the 96-bit UltraScale+ DNA: DNA[55:0] ^ DNA[95:56]).
+ * The DNA comes from the PL (rsys_dna, DNA_PORTE2) or, where the PL has no DNA port (Versal),
+ * from the processor side (plat_dna: the PMC's eFUSE cache); without a DNA: 0x00 + the MAC
+ * address (status bit "hardware serial" = 0) */
+static u32 g_dna[4];
+static const char *g_dna_src = "none";
+
+static int read_dna(void)
 {
 	if (sv(RSYS_S_HP_STATUS) & 8u) {
-		u32 d0 = sv(RSYS_S_DNA0), d1 = sv(RSYS_S_DNA1), d2 = sv(RSYS_S_DNA2);
-		u64 lo = (((u64)d1 << 32) | d0) & 0x00FFFFFFFFFFFFFFull;
-		u64 hi = (((u64)d2 << 8) | (d1 >> 24)) & 0xFFFFFFFFFFull;
-		u64 s = lo ^ hi;
+		g_dna[0] = sv(RSYS_S_DNA0); g_dna[1] = sv(RSYS_S_DNA1); g_dna[2] = sv(RSYS_S_DNA2); g_dna[3] = 0;
+		g_dna_src = "PL DNA_PORTE2";
+		return 1;
+	}
+	if (plat_dna(g_dna)) { g_dna_src = "PMC eFUSE cache"; return 1; }
+	memset(g_dna, 0, sizeof(g_dna));
+	g_dna_src = "none";
+	return 0;
+}
+
+static void make_serial(void)
+{
+	if (read_dna()) {
+		u64 lo  = (((u64)g_dna[1] << 32) | g_dna[0]) & 0x00FFFFFFFFFFFFFFull;
+		u64 mid = (((u64)g_dna[3] << 40) | ((u64)g_dna[2] << 8) | (g_dna[1] >> 24)) & 0x00FFFFFFFFFFFFFFull;
+		u64 top = (g_dna[3] >> 16) & 0xFFFFu;
+		u64 s = lo ^ mid ^ top;
 		for (int i = 0; i < 7; i++) g_serial[i] = (u8)(s >> (48 - 8 * i));
 		g_serial_hw = 1;
 	} else {
@@ -684,10 +703,10 @@ void hsb_cmd(char **argv, int argc)
 		xil_printf("ok HSB off\r\n");
 	} else if (!strcmp(a, "serial")) {
 		make_serial();
-		xil_printf("device DNA %s 0x%08x_%08x_%08x -> HSB serial ", (sv(RSYS_S_HP_STATUS) & 8u) ? "" : "(not read)",
-			   sv(RSYS_S_DNA2), sv(RSYS_S_DNA1), sv(RSYS_S_DNA0));
+		xil_printf("device DNA (%s) 0x%08x_%08x_%08x_%08x -> HSB serial ", g_dna_src, g_dna[3], g_dna[2], g_dna[1],
+			   g_dna[0]);
 		pr_serial();
-		xil_printf(" (DNA[55:0] xor DNA[95:56]; without a DNA 00 + MAC)\r\n");
+		xil_printf(" (DNA[55:0] xor DNA[111:56] xor DNA[127:112]; without a DNA 00 + MAC)\r\n");
 	} else if (!strcmp(a, "src") && argc > 2) {
 		r_ops[1] = !strcmp(argv[2], "beam") ? 2u : (strcmp(argv[2], "iq") ? 1u : 0u);
 		xil_printf("ok source %s (applies at the next data-plane enable)\r\n", src_name(r_ops[1]));

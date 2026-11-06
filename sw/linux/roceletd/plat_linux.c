@@ -3,11 +3,17 @@
  * standalone-BSP functions the console sources call (compat/: Xil_In32/Out32, xil_printf,
  * XIic_Send):
  *  - registers: the design's physical addresses 0x8000_0000.. (rsys_aon_0: rocelet_sys behind
- *    the clock guard, always-on block at +0x8_0000) through the generic-UIO device rocelet-regs;
- *    any other address reads 0xFFFFFFFF (the AXI IIC and DMA blocks belong to Linux drivers);
+ *    the clock guard, always-on block at +0x8_0000) through the generic-UIO device rocelet-regs
+ *    (every map of it), plus the optional UIO devices named in plat_linux_map() (VCK190: the
+ *    MRMAC's registers, rocelet-mrmac); any other address reads 0xFFFFFFFF (the AXI IIC and DMA
+ *    blocks belong to Linux drivers);
  *  - PS DDR window: the reserved-memory carve-out through the UIO device rocelet-ddr, mapped
  *    uncached by UIO (no cache maintenance; aligned 64-bit accesses);
  *  - I2C: the AXI IIC at a base address = the i2c-xiic adapter of device "<base>.i2c", i2c-dev;
+ *    the PS I2C (VADJ, vadj.c) likewise: the i2c-cadence adapter "<base>.i2c";
+ *  - device DNA (Versal): the PMC eFUSE cache through the xilinx-secure-config nvmem device
+ *    (CONFIG_XLNX_SEC_CFG, DT node xlnx,versal-sec-cfg; the PLM's XilNvm eFUSE cache read);
+ *  - CPU name: /proc/cpuinfo;
  *  - time: CLOCK_MONOTONIC.
  *
  * Copyright (c) 2026 Opsero Electronic Design Inc.
@@ -27,6 +33,7 @@
 #include <sys/socket.h>
 #include <time.h>
 #include <unistd.h>
+#include <linux/i2c.h>
 #include <linux/i2c-dev.h>
 
 #include "xil_types.h"
@@ -40,6 +47,10 @@
 static volatile u8 *g_regs;
 static u32 g_regs_size;
 static int g_regs_fd = -1;
+/* every mapped register window: the register UIO's maps, then the extra UIO devices */
+#define MAX_WIN 8
+static struct { u64 pa; u32 size; volatile u8 *va; } g_win[MAX_WIN];
+static int g_nwin;
 static volatile u8 *g_ddr;
 static u64 g_ddr_pa;
 static u32 g_ddr_size;
@@ -101,6 +112,11 @@ static int uio_map(int n, int idx, volatile u8 **va, u64 *pa, u32 *size, int *fd
 	return 0;
 }
 
+static void win_add(u64 pa, u32 size, volatile u8 *va)
+{
+	if (g_nwin < MAX_WIN) { g_win[g_nwin].pa = pa; g_win[g_nwin].size = size; g_win[g_nwin].va = va; g_nwin++; }
+}
+
 int plat_linux_open(const char *regs_name, const char *ddr_name, int wait_s)
 {
 	int n = -1;
@@ -118,7 +134,46 @@ int plat_linux_open(const char *regs_name, const char *ddr_name, int wait_s)
 	if (pa != REGS_PA) dlog("roceletd: WARNING: register window at 0x%llx, expected 0x%x", (unsigned long long)pa, REGS_PA);
 	dlog("roceletd: register window /dev/uio%d (%s) PA 0x%llx, %u KB", n, regs_name, (unsigned long long)pa,
 	     g_regs_size >> 10);
+	win_add(pa, g_regs_size, g_regs);
+	/* further reg entries of the same node (map1..): other register blocks of the design */
+	for (int i = 1; i < MAX_WIN; i++) {
+		volatile u8 *va;
+		u32 sz;
+		char p[PATH_MAX];
+		snprintf(p, sizeof(p), "/sys/class/uio/uio%d/maps/map%d", n, i);
+		if (access(p, F_OK) || uio_map(n, i, &va, &pa, &sz, NULL)) break;
+		win_add(pa, sz, va);
+		dlog("roceletd: register window /dev/uio%d map%d PA 0x%llx, %u KB", n, i, (unsigned long long)pa, sz >> 10);
+	}
 	return 0;
+}
+
+int plat_linux_map(const char *names)
+{
+	int found = 0;
+	const char *s = names;
+	while (s && *s) {
+		char one[64];
+		size_t l = strcspn(s, ",");
+		snprintf(one, sizeof(one), "%.*s", (int)l, s);
+		s += l;
+		if (*s == ',') s++;
+		if (!*one) continue;
+		int n = uio_find(one);
+		if (n < 0) continue;
+		for (int i = 0; i < MAX_WIN; i++) {
+			volatile u8 *va;
+			u64 pa;
+			u32 sz;
+			char p[PATH_MAX];
+			snprintf(p, sizeof(p), "/sys/class/uio/uio%d/maps/map%d", n, i);
+			if (access(p, F_OK) || uio_map(n, i, &va, &pa, &sz, NULL)) break;
+			win_add(pa, sz, va);
+			found++;
+			dlog("roceletd: register window /dev/uio%d (%s) PA 0x%llx, %u KB", n, one, (unsigned long long)pa, sz >> 10);
+		}
+	}
+	return found;
 }
 
 int plat_regs_fd(void) { return g_regs_fd; }
@@ -126,20 +181,27 @@ u32 plat_regs_size(void) { return g_regs_size; }
 
 static int g_bad_addr_msgs;
 
+static volatile u32 *win_ptr(UINTPTR a)
+{
+	for (int i = 0; i < g_nwin; i++)
+		if ((u64)a >= g_win[i].pa && (u64)a - g_win[i].pa + 4 <= g_win[i].size)
+			return (volatile u32 *)(g_win[i].va + ((u64)a - g_win[i].pa));
+	return NULL;
+}
+
 u32 Xil_In32(UINTPTR a)
 {
-	UINTPTR off = a - REGS_PA;
-	if (g_regs && a >= REGS_PA && off + 4 <= g_regs_size)
-		return *(volatile u32 *)(g_regs + off);
-	if (g_bad_addr_msgs++ < 8) xil_printf("(address 0x%08lx is outside the register window: reads 0xffffffff)\r\n", (unsigned long)a);
+	volatile u32 *p = win_ptr(a);
+	if (p) return *p;
+	if (g_bad_addr_msgs++ < 8) xil_printf("(address 0x%08lx is outside the register windows: reads 0xffffffff)\r\n", (unsigned long)a);
 	return 0xFFFFFFFFu;
 }
 
 void Xil_Out32(UINTPTR a, u32 v)
 {
-	UINTPTR off = a - REGS_PA;
-	if (g_regs && a >= REGS_PA && off + 4 <= g_regs_size) { *(volatile u32 *)(g_regs + off) = v; return; }
-	if (g_bad_addr_msgs++ < 8) xil_printf("(address 0x%08lx is outside the register window: write dropped)\r\n", (unsigned long)a);
+	volatile u32 *p = win_ptr(a);
+	if (p) { *p = v; return; }
+	if (g_bad_addr_msgs++ < 8) xil_printf("(address 0x%08lx is outside the register windows: write dropped)\r\n", (unsigned long)a);
 }
 
 /* ---------------------------------------------------------------- PS DDR window */
@@ -186,7 +248,28 @@ void plat_ddr_get64(u32 off, u8 *dst)
 void plat_init(void) { }
 int  plat_rx_ready(void) { return 0; }     /* console lines come from the control socket */
 char plat_rx_byte(void) { return 0; }
-const char *plat_cpu(void) { return "Cortex-A53, Linux"; }
+/* "Cortex-A53, Linux" / "Cortex-A72, Linux": the ARM part number of /proc/cpuinfo */
+const char *plat_cpu(void)
+{
+	static char name[48];
+	if (name[0]) return name;
+	const char *cpu = "ARM";
+	FILE *f = fopen("/proc/cpuinfo", "r");
+	if (f) {
+		char l[128];
+		unsigned part;
+		while (fgets(l, sizeof(l), f)) {
+			if (sscanf(l, "CPU part : 0x%x", &part) == 1 || sscanf(l, "CPU part\t: 0x%x", &part) == 1) {
+				cpu = part == 0xd03 ? "Cortex-A53" : part == 0xd08 ? "Cortex-A72" : part == 0xd05 ? "Cortex-A55" :
+				      part == 0xd0c ? "Neoverse-N1" : "ARM";
+				break;
+			}
+		}
+		fclose(f);
+	}
+	snprintf(name, sizeof(name), "%s, Linux", cpu);
+	return name;
+}
 
 u32 plat_ticks(void)
 {
@@ -340,4 +423,81 @@ unsigned XIic_Recv(UINTPTR base, u8 addr, u8 *buf, unsigned n, u8 option)
 	if (ioctl(fd, I2C_SLAVE_FORCE, (long)addr) < 0) return 0;
 	ssize_t r = read(fd, buf, n);
 	return r < 0 ? 0 : (unsigned)r;
+}
+
+/* ---------------------------------------------------------------- PS I2C (vadj.c) */
+static int pi2c_fd(UINTPTR base)
+{
+	static UINTPTR fbase;
+	static int fd = -1;
+	if (fd >= 0 && fbase == base) return fd;
+	int bus = plat_i2c_bus(base);
+	if (bus < 0) { xil_printf("i2c: no Linux adapter for the PS I2C at 0x%08lx (i2c-cadence)\r\n", (unsigned long)base); return -1; }
+	char p[32];
+	snprintf(p, sizeof(p), "/dev/i2c-%d", bus);
+	int f = open(p, O_RDWR | O_CLOEXEC);
+	if (f < 0) { xil_printf("i2c: %s: %s\r\n", p, strerror(errno)); return -1; }
+	if (fd >= 0) close(fd);
+	fd = f;
+	fbase = base;
+	return fd;
+}
+
+int plat_pi2c_write(UINTPTR base, u8 addr, const u8 *buf, unsigned n)
+{
+	int fd = pi2c_fd(base);
+	if (fd < 0) return -1;
+	struct i2c_msg m = { .addr = addr, .flags = 0, .len = (__u16)n, .buf = (__u8 *)buf };
+	struct i2c_rdwr_ioctl_data x = { .msgs = &m, .nmsgs = 1 };
+	return ioctl(fd, I2C_RDWR, &x) == 1 ? 0 : -1;
+}
+
+int plat_pi2c_read_reg(UINTPTR base, u8 addr, u8 reg, u8 *val)
+{
+	int fd = pi2c_fd(base);
+	if (fd < 0) return -1;
+	struct i2c_msg m[2] = {
+		{ .addr = addr, .flags = 0, .len = 1, .buf = &reg },
+		{ .addr = addr, .flags = I2C_M_RD, .len = 1, .buf = val },
+	};
+	struct i2c_rdwr_ioctl_data x = { .msgs = m, .nmsgs = 2 };
+	return ioctl(fd, I2C_RDWR, &x) == 2 ? 0 : -1;
+}
+
+/* ---------------------------------------------------------------- device DNA */
+/* Versal: xilinx-secure-config (drivers/nvmem/xlnx_secure_config.c) reads the eFUSE cache through
+ * the PLM (PM_EFUSE_READ_VERSAL) at nvmem offset 0x1_0000 | cache offset; DNA_0..3 = cache
+ * 0x20..0x2C. ZynqMP / no such device: none (the PL reads the DNA there) */
+#define SEC_CFG_EFUSE   0x10000u
+#define EFUSE_CACHE_DNA 0x20u
+int plat_dna(u32 dna[4])
+{
+	static u32 d[4];
+	static int state;                       /* 0 not read, 1 valid, -1 none */
+	if (!state) {
+		state = -1;
+		DIR *dir = opendir("/sys/bus/nvmem/devices");
+		struct dirent *e;
+		while (dir && (e = readdir(dir))) {
+			if (strncmp(e->d_name, "xilinx-secure-config", 20)) continue;
+			char p[PATH_MAX];
+			snprintf(p, sizeof(p), "/sys/bus/nvmem/devices/%s/nvmem", e->d_name);
+			int fd = open(p, O_RDONLY | O_CLOEXEC);
+			if (fd < 0) { dlog("roceletd: %s: %s", p, strerror(errno)); continue; }
+			ssize_t r = pread(fd, d, sizeof(d), SEC_CFG_EFUSE | EFUSE_CACHE_DNA);
+			close(fd);
+			u32 all = d[0] | d[1] | d[2] | d[3], any = ~d[0] | ~d[1] | ~d[2] | ~d[3];
+			if (r == (ssize_t)sizeof(d) && all && any) {
+				state = 1;
+				dlog("roceletd: device DNA 0x%08x_%08x_%08x_%08x (%s)", d[3], d[2], d[1], d[0], e->d_name);
+			} else {
+				dlog("roceletd: %s: no device DNA (read %zd bytes)", p, r);
+			}
+			break;
+		}
+		if (dir) closedir(dir);
+	}
+	if (state < 0) return 0;
+	memcpy(dna, d, sizeof(d));
+	return 1;
 }

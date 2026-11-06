@@ -6,6 +6,11 @@
  *     the shipping MAC) or its 10G option omac_10g (10GBASE-R, data.json "mac"); one binary
  *     for both: the MAC type and the link speed are read from the always-on block's CAPS
  *     register (MAC_NAME, LINK_GBPS)
+ *   VCK190 (Cortex-A72 standalone, BOARD_VCK190): target vck190_fmcp1, the Versal hard MRMAC
+ *     (1x100GE CAUI-4, RS-FEC) behind the mac_mrmac100g adapter; the same always-on block and
+ *     register map as the ZCU106 (M_AXI_LPD at 0x8000_0000), plus the MRMAC's own registers
+ *     (MRMAC_BASE). rocelet_sys runs on its own free-running engine clock (300 MHz), not on a
+ *     MAC user clock
  * board.h is generated per target by Vitis/py/build-vitis.py (BOARD_<NAME>, LINE_RATE).
  *
  * rocelet_sys_0 (MAC user clock, 512 KB window):
@@ -34,23 +39,42 @@
 #include "rocelet_regs.h"
 #include "rsys_regs.h"
 
-#if defined(BOARD_ZCU106)
-/* ---------------- ZCU106: A53, omac_10g / omac_40g, always-on block ---------------- */
-#define TARGET_NAME    "ZCU106"
-#define MAC_OMAC       1
+#if defined(BOARD_ZCU106) || defined(BOARD_VCK190)
+/* ---------------- PS targets: always-on block + clock guard (ZCU106, VCK190) ---------------- */
+#define HAS_AON        1
 /* the MAC of this bitstream, from the always-on CAPS ([7:0] link Gb/s, [19:16] MAC type) */
 #define AON_CAPS_GBPS(c)  ((u32)(c) & 0xFFu)
 #define AON_CAPS_MAC(c)   (((u32)(c) >> 16) & 0xFu)
+#define AON_MAC_CMAC      1u
 #define AON_MAC_OMAC10G   2u
 #define AON_MAC_OMAC40G   3u
+#define AON_MAC_MRMAC     4u
+#define LINK_GBPS      AON_CAPS_GBPS(aon_rd(AON_CAPS))
+#if defined(BOARD_ZCU106)
+/* ZCU106: A53, omac_10g / omac_40g */
+#define TARGET_NAME    "ZCU106"
+#define MAC_OMAC       1
 #define MAC_IS_40G     (AON_CAPS_MAC(aon_rd(AON_CAPS)) == AON_MAC_OMAC40G)
 #define MAC_NAME       (MAC_IS_40G ? "omac_40g" : "omac_10g")
-#define LINK_GBPS      AON_CAPS_GBPS(aon_rd(AON_CAPS))
 #define F_CLK_HZ       156250000u          /* GT TXUSRCLK2 = omac / rocelet_sys clock */
 #define HAS_FEC        0
-/* PAUSE TX (802.3x frames from the engine's RX FIFO level) on after boot: the ZCU106 is a
- * point-to-point link to the host NIC, and the PS DDR window is the slower memory; 'pause tx 0'
- * turns it off. PAUSE RX (honour the host's PAUSE) stays off by default. */
+#else
+/* VCK190: A72, hard MRMAC 100G (registers on its s_axi, port-0 page) */
+#define TARGET_NAME    "VCK190"
+#define MAC_MRMAC      1
+#define MAC_NAME       "MRMAC"
+#define F_CLK_HZ       300000000u          /* the engine clock (data.json clk_hz), free-running */
+#define HAS_FEC        1                   /* RS-FEC CL91 RS(528,514) in the MRMAC, on after boot */
+#if defined(XPAR_MRMAC_0_BASEADDR)
+#define MRMAC_BASE     XPAR_MRMAC_0_BASEADDR
+#else
+#define MRMAC_BASE     0x80130000u         /* bd_versal.tcl: mrmac_0/s_axi, 64 KB */
+#endif
+#define VADJ_IIC_BASE  0xFF020000u         /* LPD I2C0 (PMC MIO 46/47): TCA9548 0x74 -> IR38164 0x1E */
+#endif
+/* PAUSE TX (802.3x frames from the engine's RX FIFO level) on after boot: a point-to-point link
+ * to the host NIC, and the PS DDR window is the slower memory; 'pause tx 0' turns it off.
+ * PAUSE RX (honour the host's PAUSE) stays off by default. */
 #define PAUSE_TX_DEFAULT 1
 #define HAS_DDR_WIN    1                   /* PS DDR window: MR 3 over the platform's buffer (plat.h) */
 #define DDR_WIN_LADDR  0x0000008000000000ull /* local address bit 39: offset into the PS DDR region */
@@ -85,11 +109,14 @@
 #define AON_DROP_WR    0x44u
 #define AON_GUARD_TO   0x48u               /* forwarded accesses that timed out (write: clear) */
 #define AON_GUARD_TMO  0x4Cu               /* forwarding time-out, pl_clk0 cycles */
-/* 40G lane status (omac_40g; zero on 10G). LANE_STAT: [3:0] block lock per physical (QSFP)
+/* lane status. omac_40g (zero on 10G): LANE_STAT [3:0] block lock per physical (QSFP)
  * lane [7:4] alignment-marker lock [15:8] PCS lane number found on QSFP lane p at [8+2p +: 2]
  * [22:16] lane skew of the last alignment (66-bit blocks) [31] four-lane MAC; a write clears
  * the lane event counters LANE_BIP(0..3) (BIP3 errors per QSFP lane), SKEW_FAIL (failed
- * alignment attempts) and RX_OVF (received frames cut / dropped at the clock crossing) */
+ * alignment attempts) and RX_OVF (received frames cut / dropped at the clock crossing).
+ * MRMAC (VCK190): LANE_STAT [3:0] RS-FEC lane lock per physical lane [5:4] FEC lane mapping
+ * [6] FEC aligned [27:8] PCS lane block lock 0-19 [31] four-lane MAC; RX_OVF as above, the
+ * other counters 0 */
 #define AON_LANE_STAT  0x60u
 #define AON_LANE_BIP(l) (0x64u + 4u * (u32)(l))
 #define AON_SKEW_FAIL  0x74u
