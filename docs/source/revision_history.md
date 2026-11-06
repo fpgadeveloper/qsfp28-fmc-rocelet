@@ -28,6 +28,10 @@ on the Cortex-A72, with the Versal hard blocks where they do better. The rocelet
   PHY fix, fixed MACs, the reserved memory and UIO nodes, the MRMAC as UIO device
   `rocelet-mrmac`, 64-bit DMA addressing, the U-Boot VADJ fragment); `roceletd` maps further
   register blocks (`extra_uio`).
+* **HSB register `TARGET`** (0x7F00001C, before reserved): the target id of the bitstream (the
+  always-on `TARGET` on the ZCU106 / VCK190, "KCU1" on the KCU116). The beamforming demo names
+  the board from it (`VCK190 -> 100G RoCE -> GPU`; `--board` still overrides), and from
+  `LINK_GBPS` with an older console as before.
 * **Simulation**: `run_xsim_mrmac.sh`, a self-checking testbench of the MRMAC adapter.
 * **Docs**: the Versal pages [](versal_hw.md) (with the generated block diagram
   `rocelet-versal-block.png`) and [](versal_linux.md); the VCK190 in getting started, host
@@ -63,8 +67,6 @@ clock 300 MHz, WNS +0.043 ns, WHS +0.012 ns, no critical warnings. See [](resour
   below the 100G line rate: keep PAUSE TX on (the default) for host writes into it. Both
   directions at once share the DDR4 memory with Linux and do not reach line rate in both
   directions ([](versal_hw.md#bandwidth-of-the-ps-ddr-window)).
-* The beamforming demo names the board from `LINK_GBPS`, which is 100 on both the KCU116 and the
-  VCK190: start it with `--board VCK190`.
 
 * `loop pcs` / `t pcs` use the GT near-end PMA loopback: the GTY near-end PCS loopback does not
   hold the MRMAC's link.

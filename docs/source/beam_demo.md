@@ -102,10 +102,13 @@ maps use one frame (no averaging); the spectrum display is smoothed (`--spec-avg
 ![The window as the application renders it (headless PNG from the board's frames, 10 Gb/s, attract mode)](images/beam-window.jpg)
 
 The application opens one 1920 x 1080 window, fullscreen (`--windowed` for a window). Its header
-(and the page's) names the source: `ZCU106 -> 40G RoCE -> GPU` or `KCU116 -> 100G RoCE -> GPU`,
-from the board's HSB register `LINK_GBPS` (`--board` names a ported board, and the VCK190:
-`LINK_GBPS` 100 names the KCU116 by default, so start the demo with `--board VCK190` for a
-`VCK190 -> 100G RoCE -> GPU` header; `FPGA -> RoCE -> GPU` when the register cannot be read):
+(and the page's) names the source: `KCU116 -> 100G RoCE -> GPU`, `ZCU106 -> 40G RoCE -> GPU` or
+`VCK190 -> 100G RoCE -> GPU`. The board comes from its HSB register `TARGET` (the target id of
+the bitstream) and the rate from `LINK_GBPS` ([](hsb.md#opsero-registers)); `--board` overrides
+the name (for example for a ported board whose target id the application does not know: it
+then shows the id's four characters). A console before version 0.6.0 reads `TARGET` 0, and the
+name then follows `LINK_GBPS` (100 KCU116, 40 / 10 ZCU106); `FPGA -> RoCE -> GPU` when neither
+register can be read:
 
 * **Sky map** (left, large): the power map over the unit disc, title CONVENTIONAL (Bartlett,
   "power 0 .. -40 dB re peak") or MVDR ("power -10 .. -40 dB re element power"). Markers sit at the true source positions of the frame's
@@ -306,8 +309,7 @@ What is needed:
   or bare-metal console) with port 0 connected to the host's port at 40G: the demo then runs at
   up to 40 Gb/s (start it with `rl hsb on` on the board, over SSH). Or the **VCK190** + 2x
   QSFP28 FMC on FMCP1 (Linux image or bare-metal console) with port 0 connected to the host's
-  100G port: the same rate range as the KCU116 (`rl hsb on` on the board, `--board VCK190` on
-  the host).
+  100G port: the same rate range as the KCU116 (`rl hsb on` on the board).
 * The host: a RoCE v2 NIC that writes into GPU memory (validated: ConnectX-6 Dx), an NVIDIA GPU,
   NVIDIA's HSB 3.0.0 container (`hololink-demo:3.0.0`: Holoscan 4.4, hololink 3.0.0, CuPy; no
   extra packages), and for the window a monitor on the GPU with the full NVIDIA display driver
@@ -378,7 +380,7 @@ Useful options:
 | `--windowed` | a 1920 x 1080 window instead of fullscreen |
 | `--fps`, `--update-hz`, `--attract-idle` | frames beamformed per second (default 60; the others are counted), scene writes per second (20), seconds before attract mode (10, 0 = never) |
 | `--script "t cmd args; ..."` or `@file` | replayed input (key, move, press / release, drag, scroll, elem, quit) through the same handlers: unattended tests |
-| `--board NAME` | board name in the window header and on the page (default: from `LINK_GBPS`, 100 KCU116, 40 / 10 ZCU106; `--board VCK190` for the VCK190) |
+| `--board NAME` | board name in the window header and on the page (default: from the board's `TARGET` register: KCU116, ZCU106, VCK190; with a console before 0.6.0 from `LINK_GBPS`, 100 KCU116, 40 / 10 ZCU106) |
 | `--reg-mode block\|single` | one block write per scene change (default) or one register write per word |
 | `--source synthetic\|csynthetic` | no board: frames from the numpy model (~10 frames/s) or the same generator as a CUDA kernel (~50-60 shown/s) |
 

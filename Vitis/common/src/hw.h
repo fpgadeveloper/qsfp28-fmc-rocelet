@@ -50,6 +50,7 @@
 #define AON_MAC_OMAC40G   3u
 #define AON_MAC_MRMAC     4u
 #define LINK_GBPS      AON_CAPS_GBPS(aon_rd(AON_CAPS))
+#define TARGET_ID      aon_rd(AON_TARGET)  /* the bitstream's target id (HSB OPS_TARGET) */
 #if defined(BOARD_ZCU106)
 /* ZCU106: A53, omac_10g / omac_40g */
 #define TARGET_NAME    "ZCU106"
@@ -142,6 +143,7 @@ static inline void aon_wr(u32 off, u32 v)   { Xil_Out32(AON_REGS + off, v); }
 #else
 /* ---------------- KCU116: MicroBlaze, 100G CMAC, QSFP0 GPIO ---------------- */
 #define TARGET_NAME    "KCU116"
+#define TARGET_ID      0x4B435531u         /* "KCU1": HSB OPS_TARGET (no always-on block on this target) */
 #define PAUSE_TX_DEFAULT 0                /* PAUSE off after boot ('pause tx 1' turns it on) */
 #define MAC_CMAC       1
 #define MAC_NAME       "CMAC"

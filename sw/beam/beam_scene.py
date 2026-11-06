@@ -35,6 +35,7 @@ OPS_SOURCE = 0x7F000004          # 0 IQ16, 1 counter, 2 beam array generator
 SOURCE_BEAM = 2
 OPS_RATE_MBPS = 0x7F000008       # stream rate, Mb/s of frame + record (0 = unpaced); live: from the next frame start
 OPS_LINK_GBPS = 0x7F000018       # RO link rate of the board's target in Gb/s (0 = console before 0.5.0)
+OPS_TARGET = 0x7F00001C          # RO target id, 4 ASCII characters ("KCU1", "Z106", "VCK1"; 0 = console before 0.6.0)
 OPS_BM_BASE = 0x7F000100         # 0x7F000100..0x7F0002FF <-> system window 0x0200..0x03FF (cfg 128..255)
 OPS_BM_STAT_BASE = 0x7F000300    # 0x7F000300..0x7F000318 <-> system window 0x04E4..0x04FC (sv 57..63)
 

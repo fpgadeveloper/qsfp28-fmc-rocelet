@@ -35,6 +35,7 @@ class FakeBoard(threading.Thread):
         self.drop = drop_first
         self.latched = 0
         self.stop = False
+        self.ops = {}                     # Opsero read-only registers (OPS_LINK_GBPS, OPS_TARGET), when a test sets them
 
     def rd(self, a):
         if bs.OPS_BM_BASE <= a < bs.OPS_BM_BASE + 0x200:
@@ -45,6 +46,8 @@ class FakeBoard(threading.Thread):
             return 0, self.applied[-1][bs.OPS_BM_SCENE_ID] if self.applied else 0
         if bs.OPS_BM_STAT_BASE <= a < bs.OPS_BM_STAT_BASE + 0x1C:
             return 0, 0
+        if a in self.ops:
+            return 0, self.ops[a]
         return 3, 0
 
     def wr(self, a, v):
@@ -86,6 +89,28 @@ class FakeBoard(threading.Thread):
             rep = bytes([cmd | 0x80, fl, q[2], q[3], st, 0]) + out + struct.pack(">HBB", self.latched, 0, 0)
             if fl & 1:
                 self.sock.sendto(rep, peer)
+
+
+class TestBoardName(unittest.TestCase):
+    """The beam demo's board name: --board, OPS_TARGET, then OPS_LINK_GBPS (consoles before 0.6.0)."""
+
+    def test_targets(self):
+        self.assertEqual(br.board_name(None, 0x4B435531, 100), "KCU116")
+        self.assertEqual(br.board_name(None, 0x5A313036, 40), "ZCU106")
+        self.assertEqual(br.board_name(None, 0x5A313036, 10), "ZCU106")
+        self.assertEqual(br.board_name(None, 0x56434B31, 100), "VCK190")
+
+    def test_override(self):
+        self.assertEqual(br.board_name("ZCU111", 0x56434B31, 100), "ZCU111")
+
+    def test_old_console_falls_back_to_the_link(self):
+        self.assertEqual(br.board_name(None, None, 100), "KCU116")
+        self.assertEqual(br.board_name(None, 0, 40), "ZCU106")
+        self.assertEqual(br.board_name(None, None, None), "FPGA")
+
+    def test_unknown_target_shows_its_characters(self):
+        self.assertEqual(br.board_name(None, 0x5A313131, 100), "Z111")
+        self.assertEqual(br.board_name(None, 0xFFFFFFFF, 40), "ZCU106")   # not ASCII: the link rule
 
 
 class TestBoardRegs(unittest.TestCase):
@@ -131,6 +156,16 @@ class TestBoardRegs(unittest.TestCase):
         self.assertEqual(self.r.status()["applied_id"], 5)
         with self.assertRaises(br.RegError):
             self.r.write_block([(0x7F000400, 1)])
+
+    def test_target_id_and_link(self):
+        self.assertIsNone(self.r.target_id())                          # not answered (status 0x03): unknown
+        self.assertIsNone(self.r.link_gbps())
+        self.fb.ops = {bs.OPS_TARGET: 0, bs.OPS_LINK_GBPS: 100}        # a console before 0.6.0
+        self.assertIsNone(self.r.target_id())
+        self.assertEqual(br.board_name(None, self.r.target_id(), self.r.link_gbps()), "KCU116")
+        self.fb.ops = {bs.OPS_TARGET: 0x56434B31, bs.OPS_LINK_GBPS: 100}
+        self.assertEqual(self.r.target_id(), 0x56434B31)
+        self.assertEqual(br.board_name(None, self.r.target_id(), self.r.link_gbps()), "VCK190")
 
     def test_retry_after_lost_request(self):
         self.fb.drop = 1

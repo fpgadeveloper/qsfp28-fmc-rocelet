@@ -393,6 +393,7 @@ static int reg_rd(u32 a, u32 *v)
 	case OPS_WATCHDOG_COUNT:  *v = g_wd_n; break;
 	case OPS_LINKPAUSE_COUNT: *v = g_lp_n; break;
 	case OPS_LINK_GBPS:       *v = LINK_GBPS; break;
+	case OPS_TARGET:          *v = TARGET_ID; break;
 	default:          *v = 0; break;    /* PTP SYNC_STAT / OFM, CTRL_EVT_STAT: 0 (no PTP, no events) */
 	}
 	return ST_OK;

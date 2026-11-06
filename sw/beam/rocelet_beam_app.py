@@ -8,7 +8,7 @@
 # window that is also the control surface: dragging a source writes the new scene to the FPGA
 # (HSB register protocol, Opsero BM registers, APPLY) and the picture follows.
 #
-#   --source roce        the board (KCU116 or ZCU106 + OP120, 'hsb on'): enumeration, configure_roce,
+#   --source roce        the board (KCU116, ZCU106 or VCK190 + OP120, 'hsb on'): enumeration, configure_roce,
 #                        RoceReceiverOp into GPU memory, start gate, keepalive (as rocelet_hsb_app.py)
 #   --source synthetic   no board: frames from beam_model.generate_frame() (the bit-exact reference,
 #                        numpy, ~10 frames/s) for the scene the app writes into an in-process copy of
@@ -1050,8 +1050,9 @@ def parse_args(argv=None):
     # board (as rocelet_hsb_app.py)
     ap.add_argument("--ip", default="192.168.20.2")
     ap.add_argument("--board", default=None,
-                    help="board name in the window header and on the page (default: from the board's OPS_LINK_GBPS: "
-                         "100 KCU116, 40 / 10 ZCU106; 'FPGA' when unknown)")
+                    help="board name in the window header and on the page (default: from the board's target id, "
+                         "OPS_TARGET: KCU116, ZCU106, VCK190; consoles before 0.6.0: from OPS_LINK_GBPS, 100 KCU116, "
+                         "40 / 10 ZCU106; 'FPGA' when unknown)")
     ap.add_argument("--api", choices=["classic", "module"], default="classic")
     ap.add_argument("--module-dir", default=None)
     ap.add_argument("--reg-mode", choices=["block", "single"], default="block",
@@ -1098,18 +1099,14 @@ def parse_args(argv=None):
     return a
 
 
-# the board name for the header: --board, else the target that reports this OPS_LINK_GBPS (each target has its
-# own link rate: 100 KCU116, 40 ZCU106 omac_40g, 10 its omac_10g option); a ported design passes --board
-BOARD_BY_LINK = {100: "KCU116", 40: "ZCU106", 10: "ZCU106"}
-
-
 def source_label(c, gpu=""):
-    """The window header / page source line: '<board> -> <N>G RoCE -> GPU' from the board's OPS_LINK_GBPS
-    (c.link_gbps, None when the register read failed or the console predates it: 'FPGA -> RoCE -> GPU')."""
+    """The window header / page source line: '<board> -> <N>G RoCE -> GPU' from the board's OPS_TARGET and
+    OPS_LINK_GBPS (c.target_id, c.link_gbps; None when the register read failed or the console predates it:
+    'FPGA -> RoCE -> GPU' when neither is known)."""
     if c.source != "roce":
         return {"synthetic": "synthetic (bit-exact model)", "csynthetic": "synthetic (CUDA model)"}[c.source] + gpu
     g = getattr(c, "link_gbps", None)
-    board = c.board or BOARD_BY_LINK.get(g, "FPGA")
+    board = br.board_name(c.board, getattr(c, "target_id", None), g)
     return f"{board} -> {g}G RoCE -> GPU" if g else f"{board} -> RoCE -> GPU"
 
 
@@ -1183,6 +1180,9 @@ def main(argv=None):
                 raise RuntimeError(f"the board does not report the 8 x 8 array generator (S_BM_CAPS "
                                    f"{caps if caps is None else hex(caps)}, expected 0x{bs.CAPS_VALUE:08x}); --force runs anyway")
             link = c.link_gbps = regs.link_gbps()
+            c.target_id = regs.target_id()
+            if c.target_id:
+                print(f"board target id 0x{c.target_id:08x}", flush=True)
             print(f"source: {source_label(c)}", flush=True)
             if link:
                 ui_mod.set_rate_max(link)

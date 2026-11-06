@@ -284,7 +284,7 @@ ones in bold act.
 | 0x02000300 + 0x10000 *d* + 0x0-0xC, *d* = 0, 1 | data-plane (HIF) slices | stored; **slice 0 DP_PACKET_SIZE, DP_PACKET_UDP_PORT, DP_VP_MASK** (bit 0: 0 to 1 starts, 1 to 0 stops the data plane) |
 | 0x01000000 + 0x10000 *s* + 0x0-0xC, *s* = 0-3 | SIF packetizer | stored |
 | 0x70000000-0x70000014 | VSYNC | stored |
-| 0x7F000000-0x7F00002C | Opsero registers (ID, SOURCE, RATE_MBPS, SCENE, FRAMES, STATUS, the producer watchdog) | see [Opsero registers](#opsero-registers) |
+| 0x7F000000-0x7F00002C | Opsero registers (ID, SOURCE, RATE_MBPS, SCENE, FRAMES, STATUS, LINK_GBPS, TARGET, the producer watchdog) | see [Opsero registers](#opsero-registers) |
 | 0x7F000100-0x7F000318 | Opsero beam array generator (scene words, APPLY, status) | see [Beam array generator registers](#beam-array-generator-registers) |
 | anything else (I2C, SPI, GPIO, ...) | | status 0x03: a camera application fails cleanly |
 
@@ -303,7 +303,7 @@ reserved words read 0.
 | 0x7F000010 | FRAMES | R | frames completed since the producer last started (an enable or a link-pause resume) |
 | 0x7F000014 | STATUS | R | [0] producer running [1] data plane enabled [2] producer paused for the link [3] link pause enabled [4] keepalive watchdog armed (KEEPALIVE_TIMEOUT_MS not 0) |
 | 0x7F000018 | LINK_GBPS | R | the link rate of the board's target in Gb/s: 100 (KCU116, VCK190), 40 (ZCU106, omac_40g), 10 (ZCU106 10G option); 0 on consoles before 0.5.0. The beam demo caps its stream rate at it |
-| 0x7F00001C | reserved | R | 0 |
+| 0x7F00001C | TARGET | R | the target id of the board's bitstream, four ASCII characters: `0x4B435531` "KCU1" (KCU116), `0x5A313036` "Z106" (ZCU106), `0x56434B31` "VCK1" (VCK190); on the ZCU106 and VCK190 it is the always-on block's `TARGET` register. 0 on consoles before 0.6.0. The beam demo names the board from it |
 | 0x7F000020 | KEEPALIVE_TIMEOUT_MS | RW | 0 = watchdog off (default). Otherwise the data plane stops when no KEEPALIVE write has arrived for this many milliseconds while it is enabled. A write restarts the timer. Returns to 0 at an HSB reset (0x0004 bit 3), at `hsb on`, and when the watchdog fires |
 | 0x7F000024 | KEEPALIVE | RW | write (any value): restart the watchdog timer. Read: milliseconds since the timer last restarted |
 | 0x7F000028 | WATCHDOG_COUNT | R | data planes stopped by the watchdog since `hsb on` (kept across HSB resets) |

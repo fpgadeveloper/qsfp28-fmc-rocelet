@@ -155,10 +155,42 @@ class BoardRegs:
             return None
         return v if 0 < v <= 1000 else None
 
+    def target_id(self):
+        """OPS_TARGET (0x7F00001C): the target id, 4 ASCII characters (0x4B435531 "KCU1" KCU116, 0x5A313036
+        "Z106" ZCU106, 0x56434B31 "VCK1" VCK190); None when the console predates the register (reads 0) or
+        does not answer."""
+        try:
+            v = self.read([bs.OPS_TARGET])[0]
+        except Exception:                     # RegError, or a module-API read error: treated as unknown
+            return None
+        return v or None
+
     def close(self):
         if self.sock is not None:
             self.sock.close()
             self.sock = None
+
+
+# the board name for the header (rocelet_beam_app.py): --board, else the board's target id (OPS_TARGET, 4 ASCII
+# characters: the always-on TARGET of the bitstream on the ZCU106 / VCK190, a firmware constant on the KCU116); a
+# target id not in the table (a ported design) is shown as its characters. Consoles before 0.6.0 read 0 there: the
+# target that reports this OPS_LINK_GBPS (100 KCU116, 40 ZCU106 omac_40g, 10 its omac_10g option), as before
+BOARD_BY_TARGET = {0x4B435531: "KCU116", 0x5A313036: "ZCU106", 0x56434B31: "VCK190"}
+BOARD_BY_LINK = {100: "KCU116", 40: "ZCU106", 10: "ZCU106"}
+
+
+def board_name(board, target_id, link_gbps):
+    """--board, else the name of the target id, else its 4 characters (printable ASCII), else from the link rate
+    (consoles without OPS_TARGET), else 'FPGA'."""
+    if board:
+        return board
+    if target_id:
+        if target_id in BOARD_BY_TARGET:
+            return BOARD_BY_TARGET[target_id]
+        s = int(target_id).to_bytes(4, "big").decode("ascii", "replace").strip("\0 ")
+        if s and s.isascii() and s.isalnum():
+            return s
+    return BOARD_BY_LINK.get(link_gbps, "FPGA")
 
 
 class SimRegs:

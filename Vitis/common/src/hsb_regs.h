@@ -25,7 +25,10 @@
 #define OPS_LINK_GBPS           0x7F000018u /* RO  the link rate of this target in Gb/s (100 KCU116, 40 ZCU106 omac_40g,
                                                   10 omac_10g option); 0 on consoles before 0.5.0. Host apps cap their
                                                   stream rate at it (sw/beam: keys - / +, the page's rate) */
-/* 0x7F00001C: reserved, read 0, writes ignored */
+#define OPS_TARGET              0x7F00001Cu /* RO  the target id, 4 ASCII characters (TARGET_ID in hw.h): the always-on
+                                                  block's TARGET on the PS targets ("Z106" 0x5A313036 ZCU106, "VCK1"
+                                                  0x56434B31 VCK190), "KCU1" 0x4B435531 on the KCU116; 0 on consoles
+                                                  before 0.6.0. Host apps name the board from it (sw/beam) */
 #define OPS_KEEPALIVE_TIMEOUT_MS 0x7F000020u /* RW  0 = watchdog off (default). While the data plane is enabled the
                                                   producer stops when no KEEPALIVE write arrived for this many ms.
                                                   A write restarts the timer. Back to 0 at an HSB reset (0x4 bit 3),
