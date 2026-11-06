@@ -170,25 +170,42 @@ described on [](zynqmp_linux.md).
 
 * **From SD:** copy `BOOT.BIN` of the standalone zip (or `Vitis/boot/vck190_fmcp1/`) to the
   first (FAT) partition of a microSD card (nothing else is needed), set SW1 = 1000 and power on.
-* **Over JTAG:** set SW1 to JTAG boot (SW1 = 1111) and either load the same `BOOT.BIN` with
-  `xsdb` (part of Vitis):
+* **Over JTAG:** set SW1 to JTAG boot (SW1 = 1111) and load the device image and the console
+  with `xsdb` (part of Vitis). The device image (PDI) carries the PLM and the PSM, which set up
+  the processing system, the NoC and the DDR (Versal has no FSBL); the console then goes to
+  Cortex-A72 #0:
 
   ```
   xsdb% connect
   xsdb% targets -set -filter {name =~ "Versal*"}
-  xsdb% device program Vitis/boot/vck190_fmcp1/BOOT.BIN
+  xsdb% device program Vivado/vck190_fmcp1/vck190_fmcp1.runs/impl_1/rocelet_wrapper.pdi
+  xsdb% targets -set -filter {name =~ "Cortex-A72 #0"}
+  xsdb% rst -processor -clear-registers
+  xsdb% dow Vitis/vck190_fmcp1_workspace/rocelet_console/build/rocelet_console.elf
+  xsdb% con
   ```
 
-  or open the `Vitis/vck190_fmcp1_workspace` workspace in the Vitis IDE and run the
-  `rocelet_console` application on the hardware.
+  `rst -processor` may warn that it cannot activate the default subsystem; the warning is
+  harmless. `device program Vitis/boot/vck190_fmcp1/BOOT.BIN` loads the device image and the
+  console in one step instead, and the Vitis IDE can run the `rocelet_console` application of
+  the `Vitis/vck190_fmcp1_workspace` workspace on the hardware.
 
 The console switches the FMC's VADJ rail on itself, so the bare-metal boot needs no U-Boot.
 Open the console at **115200 baud, 8N1**; the banner shows VADJ, the Si5328 at 322.265625 MHz,
-the GT quad and the engine clock, the MRMAC link with RS-FEC, then the prompt `rl>`. The
-commands are those of [](console.md) (VCK190 differences in
-[its own section](console.md#versal-cortex-a72-bare-metal-console)).
+the GT quad and the engine clock, the MRMAC link with RS-FEC and its lane line, the PAUSE
+state and the versions, then the prompt `rl>`:
 
-% TODO(m2): check the bare-metal banner text and the xsdb JTAG recipe on the VCK190.
+```
+VADJ_FMC enabled: 1500 mV (IR38164 0x1E behind TCA9548 0x74, LPD I2C0)
+Si5328 programmed: GT reference clock 322.265625 MHz
+GTY quad ready: engine clock 300000 kHz
+Port 0: link up, 100 Gb/s, RS-FEC on, loopback off (external) (2800 ms)
+  PCS lanes 0-19 block lock 0xFFFFF | RS-FEC lane lock 0-3 1111 aligned 1 mapping 0 | ...
+PAUSE TX on (802.3x from the RX FIFO level; 'pause tx 0' turns it off)
+```
+
+The commands are those of [](console.md) (VCK190 differences in
+[its own section](console.md#versal-cortex-a72-bare-metal-console)).
 
 ## Self-test
 

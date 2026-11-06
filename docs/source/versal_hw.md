@@ -114,17 +114,16 @@ ZynqMP's `pl_ps_irq0[7:0]` bus; the design uses the ZCU106's order:
 | CIPS pin | Source | Linux DT `interrupts` |
 |---|---|---|
 | `pl_ps_irq0` | `rsys_aon_0/irq` (aggregated, level high) | `<0 84 4>` |
-| `pl_ps_irq1` | `axi_dma_0/mm2s_introut` | from the SDT (`pl_ps_irq0` + 1) |
-| `pl_ps_irq2` | `axi_dma_0/s2mm_introut` | from the SDT (`pl_ps_irq0` + 2) |
-| `pl_ps_irq3` | `axi_iic_clk/iic2intc_irpt` | from the SDT (`pl_ps_irq0` + 3) |
-| `pl_ps_irq4` | `axi_iic_qsfp0/iic2intc_irpt` | from the SDT (`pl_ps_irq0` + 4) |
+| `pl_ps_irq1` | `axi_dma_0/mm2s_introut` | `<0 85 4>` |
+| `pl_ps_irq2` | `axi_dma_0/s2mm_introut` | `<0 86 4>` |
+| `pl_ps_irq3` | `axi_iic_clk/iic2intc_irpt` | `<0 87 4>` |
+| `pl_ps_irq4` | `axi_iic_qsfp0/iic2intc_irpt` | `<0 88 4>` |
 
-The Linux device tree takes the numbers from the hardware description (the SDT flow generates
-them); the board's device-tree fixups state only the always-on block's interrupt. The always-on
-block's interrupt sources (`IRQ_*` bits) are those of the
+`pl_ps_irq0` ... `pl_ps_irq15` are GIC SPI 84 ... 99, level high. The Linux device tree takes
+the numbers from the hardware description (the SDT flow generates the values above); the
+board's device-tree fixups state only the always-on block's interrupt. The always-on block's
+interrupt sources (`IRQ_*` bits) are those of the
 [Zynq UltraScale+ design](zynqmp_hw.md#interrupt-sources-irq_-bits).
-
-% TODO(m2): confirm the GIC numbers of pl_ps_irq1-4 on hardware (/proc/interrupts) and put the DT values into the table.
 
 ## Bring-up sequence (software)
 
@@ -244,18 +243,37 @@ cables: at 25.78 Gb/s per lane a passive DAC leaves much less eye opening than a
 (40G), so **keep RS-FEC on with passive copper**, and watch the `st` counters of corrected and
 uncorrectable codewords: corrected codewords are normal on a DAC, uncorrectable ones are not.
 `fec 0` switches the MRMAC to no FEC (a port reset applies it); the host port must then be set
-to `encoding off` as well.
+to `encoding off` as well. `fec 1` and the host back at `Auto` return to RS-FEC.
 
-% TODO(m2): result of the run-time FEC switch (fec 0 / fec 1) against the ConnectX-6 Dx, and the corrected / uncorrectable codeword counts on the 3 m DAC at 100G.
+Measured against a ConnectX-6 Dx over a 3 m passive DAC: the link comes up with RS-FEC on the
+first attempt (the host's `Auto` settles on RS(528,514)); during a 60 s host WRITE at
+96.6 Gb/s (723.8 GB) the FPGA counted **0 corrected and 0 uncorrectable codewords** and 0 bad
+FCS, the host 3 corrected bits (raw BER about 2E-13) and 0 errors after FEC. The run-time switch
+works in both directions: `fec 0` with the host at `encoding off` brings the link up without
+FEC in about 2.5 s (host WRITE 97.94 Gb/s, 0 CRC and 0 symbol errors on the host), `fec 1` with
+the host at `Auto` brings RS-FEC back in about 2.5 s. The codeword counters accumulate across GT
+resets and loopback changes, which count codewords while the link re-forms; read them on a
+steady link.
 
 ### GT loopback and the self-test
 
-The MRMAC has no loopback of its own; the design uses the GTY transceivers' near-end loopback
-(the quad's `chN_loopback` inputs: `loop pma` = near-end PMA, `loop pcs` = near-end PCS),
-selected by `C_MAC_CTL[10:8]` and applied with a GT reset. The built-in self-test `t pma` /
-`rl t pma` uses it: no cable, plug or host needed ([](getting_started.md#self-test)).
+The MRMAC has no loopback of its own; the design uses the GTY transceivers' **near-end PMA
+loopback** (the quad's `chN_loopback` inputs, all four channels), selected by `C_MAC_CTL[10:8]`
+and applied with a GT reset. The built-in self-test `t pma` / `rl t pma` uses it: no cable,
+plug or host needed ([](getting_started.md#self-test)). A cable to a NIC may stay connected:
+the NIC sees one short link drop per GT reset and its link is back within a few seconds.
 
-% TODO(m2): confirm `loop pcs` (near-end PCS) on hardware, or document `pcs` as selecting the PMA loopback as on the ZCU106.
+The GTY near-end **PCS** loopback does not hold the MRMAC's 100G link (link drops, local fault,
+uncorrectable codewords), so on this target `loop pcs` and `t pcs` select the near-end PMA
+loopback, as on the ZCU106; the console prints a note when it does.
+
+Results in the PMA loopback: `t pma` **SELFTEST PASS 19/19**, `t full pma` **23/23**; the
+throughput tests through the engine's own responder reach 95.70 Gb/s (WRITE, 4 KB, one QP) and
+97.89 Gb/s payload (WRITE, 64 KB, four QPs; 100.00 Gb/s on the line with the ACKs); a 1024-byte
+WRITE takes 433 ns from the engine's transmit to its receive side through the MRMAC, RS-FEC and
+the loopback. With PAUSE RX off (the self-test default) the PAUSE frames the engine sends come
+back unheard, and the line-rate WRITE test at PMTU 1024 recovers a few losses by go-back-N
+(the test passes); with `pause rx 1` it is lossless.
 
 ### PAUSE (802.3x)
 
@@ -267,7 +285,17 @@ default) slows down instead of losing frames when the memory behind the engine i
 the link. `pause tx 0` turns it off, `pause rx 1` makes the FPGA honour the host's PAUSE frames
 ([Zynq UltraScale+ page](zynqmp_hw.md#pause-8023x)).
 
-% TODO(m2): PAUSE TX and PAUSE RX results against the ConnectX-6 Dx (frames sent / honoured, rates with and without).
+Measured against the ConnectX-6 Dx (its link pause on, the default):
+
+* **PAUSE TX**: the host counted every PAUSE frame the FPGA sent (92,400) and honoured them. A
+  host RDMA WRITE into the [PS DDR window](#bandwidth-of-the-ps-ddr-window), whose memory path is
+  slower than the link, ran at **79.4 Gb/s lossless** with PAUSE TX on, against 47.5 Gb/s with
+  `pause tx 0` (the engine's receive FIFO overflowed; go-back-N recovered the losses).
+* **PAUSE RX** (`pause rx 1`): verified in the GT PMA loopback, where the engine received and
+  honoured each of its own PAUSE frames (287 sent, 287 received, 287 honoured) during a
+  line-rate WRITE at PMTU 1024, with no loss. The ConnectX-6 Dx did not send PAUSE frames in
+  these tests, so the FPGA honouring a host's PAUSE over the cable is not characterised on this
+  target.
 
 ## Memory windows: URAM and PS DDR over the NoC
 
@@ -293,17 +321,23 @@ its bandwidth. 12500 MB/s is the 100G payload rate of one direction.
 ### Bandwidth of the PS DDR window
 
 One direction at 100G (a host RDMA WRITE into the window, or a host RDMA READ of it) needs about
-12.2 GB/s of payload, which one 512-bit NoC port carries. **Both directions at once** need
-about 24.5 GB/s, which is the order of the whole DDR4 interface's peak (DDR4-3200, 64 bits:
-25.6 GB/s for reads and writes together) while Linux uses the same memory, so **full-duplex
-100G traffic into and out of the PS DDR window does not reach line rate in both directions**.
-This is a property of the memory, not of the engine: the URAM window, FPGA-to-host streams and
-the HSB data plane do not touch the DDR window and run at line rate. A design that needs
+12.2 GB/s of payload. Measured on the VCK190 (PMTU 4096, a 1 MB buffer of the bare-metal
+console, PAUSE TX on), the window carries **about 79 Gb/s in each direction**: host WRITE
+79.4 Gb/s, lossless and every beat checked (`ddr check`), host READ 79.2 Gb/s. A host WRITE is
+held to that rate by the FPGA's PAUSE frames; without them (`pause tx 0`) the engine's receive
+FIFO overflows and the transfer drops to 47.5 Gb/s with go-back-N recoveries, so keep PAUSE TX
+on when the host writes into the PS DDR window. Traffic into and out of the URAM window and
+FPGA-to-host streams into host memory do not use this path (91.8-97.5 Gb/s,
+[](resources.md#measured-vck190_fmcp1-100g)).
+
+**Both directions at once** need about 24.5 GB/s, which is the order of the whole DDR4
+interface's peak (DDR4-3200, 64 bits: 25.6 GB/s for reads and writes together) while Linux uses
+the same memory, so **full-duplex 100G traffic into and out of the PS DDR window does not reach
+line rate in both directions**; the rate with both directions at once is not characterised.
+This is a property of the memory path, not of the engine. A design that needs
 full-duplex 100G into external memory can give the PS DDR window a memory of its own, such as
 the VCK190's LPDDR4, which Linux does not use (a NoC path and a region outside Linux's memory:
 a future option of this design).
-
-% TODO(m2): measured host WRITE into / READ of the PS DDR window at 100G (one direction, and both directions at once), with PAUSE TX on and off.
 
 ## Netdev DMA channel
 
@@ -356,7 +390,5 @@ timing and measured rates per board are on [](resources.md).
 | Always-on | `TARGET` `0x56434B31` ("VCK1"); `CAPS` `0x07044064` |
 | Firmware | `BOARD_VCK190` in `Vitis/common/src/hw.h`: `MAC_MRMAC`, `F_CLK_HZ` 300000000 (the engine clock), `HAS_FEC` 1, `PAUSE_TX_DEFAULT` 1, `HAS_VADJ`, `HAS_PLAT_DNA`; MRMAC registers at `0x8013_0000` |
 | Linux | `Yocto/bsp/vck190_fmcp1/` (defaults in [](versal_linux.md#per-board-defaults)) |
-| Resources and timing | 88,574 LUT (9.8 %), 119,805 FF, 103 BRAM36, 16 URAM, 1,115 DSP; WNS +0.043 ns / WHS +0.012 ns ([](resources.md)) |
-| Measured | see [](resources.md#measured-vck190_fmcp1-100g) |
-
-% TODO(m2): refresh the resources/timing row from the release build, and add a "Measured" summary (link-up time, RDMA rates into URAM and the PS DDR window, PAUSE) as the ZCU106 row has.
+| Resources and timing | 88,574 LUT (9.8 %), 119,805 FF, 103 BRAM36, 16 URAM, 1,115 DSP (56.7 %), WNS +0.043 ns / WHS +0.012 ns, engine clock 300 MHz (build of 2026-11-06; [](resources.md)) |
+| Measured | ConnectX-6 Dx at 100000 with FEC `Auto` (RS) over a 3 m DAC: link up with RS-FEC in 2.0-6.7 s (PCS lanes 0-19 and RS-FEC lanes 0-3 locked, aligned), `t pma` 19/19, host WRITE / READ / SEND 97.5 / 96.3 / 91.8 Gb/s and FPGA WRITE with immediate 93.5 Gb/s into host memory (PMTU 4096), PS DDR window 79.4 / 79.2 Gb/s (host WRITE / READ) lossless with PAUSE TX, 0 uncorrectable codewords ([](resources.md#measured-vck190_fmcp1-100g)) |

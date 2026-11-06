@@ -110,7 +110,7 @@ queue pairs are then connected to each other (QP q to QP q^1), and the firmware 
 |---------|--------|
 | `t` | the suite: link, loopback path, ARP/ICMP, firmware WRs through the memory window, READ (single and multi-packet, duplicate), ICRC (bad frames counted and dropped), CNP and 802.1Q tags in host frames, WRITE / SEND / WRITE-imm / SEND-imm streams, TX/RX fault injection (go-back-N recovery), access error |
 | `t full` | the suite plus READ at PMTU 1024, throughput and latency |
-| `t [full] pma`, `t [full] pcs` | the same in the GT near-end PMA (or PCS) loopback, then back to the previous loopback mode: no plug needed, a cable to a NIC may stay connected (on the ZCU106 `pcs` selects the PMA loopback too) |
+| `t [full] pma`, `t [full] pcs` | the same in the GT near-end PMA (or PCS) loopback, then back to the previous loopback mode: no plug needed, a cable to a NIC may stay connected (on the ZCU106 and the VCK190 `pcs` selects the PMA loopback too) |
 | `arp`, `wrq`, `read <len> <pmtu_log2>`, `icrc`, `cnpvlan`, `access` | single tests |
 | `write <len> <pmtu_log2> <n> [op]`, `tput <len> <pmtu_log2> <ms> [nqp]`, `lat <n> <len> <pmtu_log2>` | streams, throughput, latency |
 | `inj <rx> <1 drop\|2 corrupt> <class> <skip> <count> <nwr> <len> <pmtu_log2>` | fault injection run (class bits: 1 request, 2 ACK, 4 NAK, 8 READ response) |
@@ -201,7 +201,7 @@ command below also works as `rl <command>`. The PS DDR window commands (`ddr`, `
 | Before the MAC | | switches the FMC's VADJ rail on (1.5 V; prints `VADJ_FMC on`), as U-Boot does for Linux |
 | MAC, link | omac_40g 40GBASE-R4 (10G option: omac_10g); no FEC | the hard MRMAC, 100GBASE-R4 with **RS-FEC on by default** (`fec 0` / `fec 1`, then relink; the host port must match) |
 | GT reference clock | Si5328 156.25 MHz | Si5328 322.265625 MHz |
-| Loopback | `loop pma` (`pcs` selects PMA too) | `loop pma` / `loop pcs` (GTY near-end PMA / PCS, applied with a GT reset) |
+| Loopback | `loop pma` (`pcs` selects PMA too) | `loop pma` (GTY near-end PMA, applied with a GT reset; `pcs` selects PMA too, with a note: the GTY near-end PCS loopback does not hold the MRMAC link) |
 | MAC control and status | the always-on block; at 40G a lane line | the always-on block for resets and link, the MRMAC's own registers for its configuration; `st` and every link attempt print the MRMAC line: PCS lanes 0-19 block lock, RS-FEC lane lock 0-3, alignment and lane mapping, the MRMAC's RX and FEC status, adapter RX overflows; the RS-FEC corrected / uncorrectable codeword counters |
 | Clock in `st` | `MAC clock 156250 kHz` (the GT user clock, stops while the GT is in reset) | `engine clock 300000 kHz` (free-running) |
 | Engine settings | `CTRL.PAUSE_RX_LEVEL` = 1, `PAUSE_QCLK` 512 / 2048, `TICK_DIV` 156 | `CTRL.PAUSE_RX_LEVEL` = 0 (the MRMAC reports a received PAUSE as a pulse with its quanta, as the CMAC), `PAUSE_QCLK` at its reset value for 100G, `TICK_DIV` 300 |

@@ -1,8 +1,6 @@
 # Revision history
 
-## 2025.2 — version 0.6.0, VCK190 target
-
-% TODO(m2): confirm the version number and add the release date to the heading.
+## 2025.2 — version 0.6.0 (2026-11-06), VCK190 target
 
 A third target, **`vck190_fmcp1`**: the VCK190 with the 2x QSFP28 FMC (OP120) on FMCP1, QSFP28
 port 0 at **100 Gb/s with RS-FEC**, built for the Versal device: the same system shell and
@@ -35,19 +33,44 @@ on the Cortex-A72, with the Versal hard blocks where they do better. The rocelet
   `rocelet-versal-block.png`) and [](versal_linux.md); the VCK190 in getting started, host
   setup, console, HSB, the beamforming demo, resources and porting (other Versal boards).
 
-% TODO(m2): "Measured" subsection (link, self-test, RDMA rates into URAM and the PS DDR window, PAUSE, FEC) and "Resources and timing" from the release build.
+### Measured (2026-11-06)
+
+VCK190 + OP120 on FMCP1, port 0, 3 m DAC to the ConnectX-6 Dx at 100000 with FEC `Auto`
+(active: RS-FEC), MTU 4200; the bare-metal Cortex-A72 console. Every figure:
+[](resources.md#measured-vck190_fmcp1-100g).
+
+* Link with RS-FEC on the first attempt (2.0-6.7 s), PCS lanes 0-19 and RS-FEC lanes 0-3
+  locked; `t pma` SELFTEST PASS 19/19, `t full pma` 23/23 (up to 97.89 Gb/s through the
+  engine's own responder).
+* RDMA payload at 100G, PMTU 4096: FPGA WRITE with immediate 93.49 Gb/s, host WRITE 97.48,
+  host SEND 91.75, host READ 96.33; a 60 s host WRITE at 96.62 Gb/s (723.8 GB) with 0
+  uncorrectable codewords and 0 errors after FEC on the host.
+* PS DDR window: host WRITE 79.37 Gb/s lossless with PAUSE TX (47.46 Gb/s with losses without),
+  host READ 79.20 Gb/s; the ConnectX-6 Dx honours the MRMAC's PAUSE frames (92,400 counted);
+  PAUSE RX verified in the GT loopback.
+* RS-FEC off and on again at run time (`fec 0` / `fec 1`, the host port matched).
+
+### Resources and timing
+
+vck190_fmcp1: **88,574 LUT (9.8 %)**, 103 BRAM36, 16 URAM, 1,115 DSP on the XCVC1902-2, engine
+clock 300 MHz, WNS +0.043 ns, WHS +0.012 ns, no critical warnings. See [](resources.md).
 
 ### Limitations
 
 * **vck190_fmcp1**: building it needs Vivado Enterprise (the XCVC1902 is not in the Standard
   edition) and the no-cost MRMAC license. OP120 port 1 is not used.
-* The PS DDR window carries one direction at 100G; both directions at once share the DDR4
-  memory with Linux and do not reach line rate in both directions
-  ([](versal_hw.md#bandwidth-of-the-ps-ddr-window)).
+* The PS DDR window carries about 79 Gb/s in one direction (one 512-bit NoC port per direction),
+  below the 100G line rate: keep PAUSE TX on (the default) for host writes into it. Both
+  directions at once share the DDR4 memory with Linux and do not reach line rate in both
+  directions ([](versal_hw.md#bandwidth-of-the-ps-ddr-window)).
 * The beamforming demo names the board from `LINK_GBPS`, which is 100 on both the KCU116 and the
   VCK190: start it with `--board VCK190`.
 
-% TODO(m2): further limitations found on hardware (e.g. FEC off at run time, PAUSE).
+* `loop pcs` / `t pcs` use the GT near-end PMA loopback: the GTY near-end PCS loopback does not
+  hold the MRMAC's link.
+* `fec 0` / `fec 1` need the host port's FEC setting to match (`encoding off` / `Auto`).
+* PAUSE RX (the FPGA honouring PAUSE frames) is verified in the GT loopback; against a host
+  that sends PAUSE it is not characterised on this target.
 
 ## 2025.2 — version 0.5.0 (2026-11-05), ZCU106 target
 

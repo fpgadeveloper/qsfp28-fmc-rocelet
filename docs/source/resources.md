@@ -13,7 +13,7 @@ current figures of each board are also in the Board specifics of its family page
 ## vck190_fmcp1 (Versal)
 
 Rocelet v0.3.0, the MRMAC adapter `mac_mrmac100g`, the engine at 300 MHz, the PS DDR window on
-one 512-bit NoC port per direction.
+one 512-bit NoC port per direction; the build of 2026-11-06, the device image measured below.
 
 | Target | Device | LUT | FF | BRAM36 | URAM | DSP | WNS / WHS (ns) |
 |--------|--------|----:|---:|-------:|-----:|----:|---------------:|
@@ -41,8 +41,9 @@ one 512-bit NoC port per direction.
   AggressiveExplore`, a post-route `phys_opt_design` when needed). No critical warnings.
 * NoC quality of service: the PS DDR window's ports request 12,500 MB/s each (write / read),
   the netdev DMA port 1,600 MB/s each way; the NoC compiler reports the requests as met.
-
-% TODO(m2): refresh the vck190_fmcp1 tables from the release build (utilisation, per-clock timing, critical warnings) and state the A72 console / roceletd sizes if relevant.
+* The Cortex-A72 console (`rocelet_console.elf`) and the Linux daemon run from DDR, so there is
+  no local-memory limit: the console is 242 KB of code and 1.1 MB of bss, most of it the 1 MB
+  PS DDR window buffer (`mr=3`).
 
 ## Version 0.5.0: zcu106 and the refactored kcu116
 
@@ -232,8 +233,47 @@ limit.
 ## Measured: vck190_fmcp1 (100G)
 
 VCK190 + OP120 on FMCP1, QSFP28 port 0, 3 m passive QSFP28 DAC to an NVIDIA ConnectX-6 Dx in the
-same test host, forced to 100000, auto-negotiation off, RS-FEC, MTU 4200.
+same test host, forced to 100000, auto-negotiation off, FEC `Auto` (active: RS-FEC), MTU 4200.
+Version 0.6.0, the bare-metal Cortex-A72 console loaded over JTAG; `rocelet_host` 0.2.0 on the
+host, host memory (no GPU); one QP, 64 KB messages unless stated, payload throughput as measured
+by the receiving side, PAUSE TX on (the default) unless stated.
 
-% TODO(m2): link (link-up time, PCS / RS-FEC lane state, corrected / uncorrectable codewords, error counters after the sessions), self-test `t pma` / `rl t pma` result.
-% TODO(m2): RDMA at 100G: FPGA WRITE with immediate into host memory, host WRITE / SEND / READ into the URAM window, host WRITE into and READ of the PS DDR window (one direction, and both at once), PAUSE TX / RX against the ConnectX-6 Dx, FEC off at run time.
+### Link
+
+| Item | Result |
+|---|---|
+| 100G link up after the MAC reset release | 2.0-6.7 s with RS-FEC, on the first attempt (including the partner's own link-up): PCS lanes 0-19 block-locked, RS-FEC lanes 0-3 locked and aligned; the ConnectX-6 Dx reports 100000 Mb/s, FEC RS(528,514) |
+| Self-test `t pma` (bare metal) | SELFTEST PASS 19/19, with the host link connected; `t full pma` 23/23: WRITE 4 KB one QP 95.70 Gb/s, 64 KB four QPs 97.89 Gb/s payload (100.00 Gb/s on the line with the ACKs); 1024-byte WRITE from the engine's transmit to its receive side through the MRMAC, RS-FEC and the PMA loopback 433 ns |
+| Ping | from the host: flood ping 200,000 x 1400 B, 0 lost (8-9 µs average round trip); 1472 B with don't-fragment |
+| Line-rate soak | host WRITE for 60 s: 96.62 Gb/s, 723.8 GB, 11.0 M messages |
+| Error counters on a steady link | over the soak: FPGA RS-FEC 0 corrected / 0 uncorrectable codewords, 0 bad FCS; host: 0 CRC and 0 symbol errors, 3 corrected bits (raw BER about 2E-13), 0 errors after FEC |
+| FEC off at run time | `fec 0` + host `encoding off`: link up in about 2.5 s without FEC, host WRITE 97.94 Gb/s, host 0 CRC / 0 symbol errors; `fec 1` + host `Auto`: RS-FEC again in about 2.5 s |
+
+### RDMA at 100G
+
+| Direction / operation | Memory | PMTU | Gb/s |
+|---|---|---|---:|
+| FPGA to host, WRITE with immediate | host memory | 4096 / 1024 | 93.49 / 88.20 |
+| Host to FPGA, WRITE | self-test pattern region `mr=0` (every write checked) | 4096 / 1024 | 97.48 / 90.39 |
+| Host to FPGA, SEND (8 KB) | - | 4096 | 91.75 |
+| Host READ of FPGA memory | URAM window | 4096 / 1024 | 96.33 / 80.97 |
+| Host to FPGA, WRITE, PAUSE TX on / off | PS DDR window (1 MB buffer, `mr=3`) | 4096 | 79.37 lossless, every beat checked / 47.46 with go-back-N recoveries |
+| Host READ of the PS DDR window | PS DDR window | 4096 | 79.20 |
+| Host WRITE into and READ of the PS DDR window at once | PS DDR window | - | not characterised |
+
+* Host WRITE and host READ at PMTU 4096 are close to the 100G line rate. At PMTU 1024 the
+  rates stay below that PMTU's line rate (about 92 Gb/s of payload).
+* The FPGA's WRITE with immediate into host memory is paced by the host's receive queue: the
+  host counted a few `out_of_buffer` events (RNR NAK and retry), 0 data errors.
+* The PS DDR window carries about 79 Gb/s each way through one 512-bit NoC port per direction at
+  the 300 MHz engine clock; PAUSE TX keeps a host WRITE into it lossless
+  ([](versal_hw.md#bandwidth-of-the-ps-ddr-window)).
+
+### PAUSE
+
+| Test | Result |
+|---|---|
+| PAUSE TX (the default): the FPGA's PAUSE frames during a host WRITE into the PS DDR window | the ConnectX-6 Dx counted every one (92,400) and honoured them: 79.37 Gb/s lossless with, 47.46 Gb/s with losses (recovered) without |
+| PAUSE RX (`pause rx 1`), GT PMA loopback, WRITE 64 KB x 200 at PMTU 1024 | 287 PAUSE frames sent, received and honoured, 0 lost (with PAUSE RX off: go-back-N recoveries, test passed) |
+| PAUSE RX, PAUSE frames from the host | not characterised (the ConnectX-6 Dx sent none in these tests) |
 % TODO(m3): rl0 (flood ping, TCP), HSB device mode and data plane into GPU memory at 100G, beamforming demo at 100 Gb/s, web UI.

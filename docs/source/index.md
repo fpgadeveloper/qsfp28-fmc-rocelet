@@ -11,20 +11,24 @@ interface, register map, integration and host rules) at
 design built around it.
 
 ```{important}
-**Status: version 0.5.0**, rocelet v0.3.0, opsero-ethernet-mac v0.1.0. Both targets are
-validated on hardware against an NVIDIA ConnectX-6 Dx. **kcu116** (100G): line-rate RDMA in both
+**Status: version 0.6.0** (2026-11-06), rocelet v0.3.0, opsero-ethernet-mac v0.1.0. Validated
+on hardware against an NVIDIA ConnectX-6 Dx. **kcu116** (100G): line-rate RDMA in both
 directions, loss recovery, link loss including a real cable pull, the built-in self-test, the
 [Holoscan Sensor Bridge device mode](hsb.md) with NVIDIA's HSB 3.0.0 host software and the
 [beamforming demo](beam_demo.md). **zcu106** (new in 0.5.0, 40G): a Zynq UltraScale+ design in
 which Linux on the Cortex-A53 runs the control plane (daemon, command line, web UI, a network
 interface on the 40G port), host RDMA into on-chip memory and into PS DDR at 40G line rate,
 802.3x PAUSE in both directions, the self-test, the HSB device mode and the beamforming demo at
-up to 40 Gb/s. **vck190_fmcp1** (100G): a Versal design with Linux on the Cortex-A72, the
-same software as the ZCU106, the hard MRMAC with RS-FEC and the PS DDR window on the NoC.
+up to 40 Gb/s. **vck190_fmcp1** (new in 0.6.0, 100G): a Versal design with the hard MRMAC with
+RS-FEC, the engine on its own 300 MHz clock and the PS DDR window on the NoC, and the same
+software as the ZCU106 on the Cortex-A72. Hardware-validated: bare-metal (the Cortex-A72
+console: 100G RS-FEC link, the self-test, host RDMA at 91.8-97.5 Gb/s, FPGA WRITE with
+immediate at 93.5 Gb/s, the PS DDR window at about 79 Gb/s each way, 802.3x PAUSE, FEC off and
+on at run time); Linux image: pending.
 Measurements and known limitations: [](resources.md), [](revision_history.md).
 ```
 
-% TODO(m2): status box: release version and date, and the vck190_fmcp1 validation summary (what was run on hardware against the ConnectX-6 Dx).
+% TODO(m3): status box: Linux image on the VCK190 validated (daemon, rl, web UI, rl0, HSB, beamforming demo at 100G); drop "Linux image: pending".
 
 ![The test bench: KCU116 with the 2x QSFP28 FMC, a 100G AOC to the ConnectX-6 Dx in the GPU host, the beamforming demo on the host's monitor](images/setup-bench.jpg)
 
