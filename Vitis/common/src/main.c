@@ -284,8 +284,8 @@ static void capd(void)
 	xil_printf("CAPE\r\n");
 }
 
-/* PAUSE settings ('pause'): PAUSE RX off, PAUSE TX = PAUSE_TX_DEFAULT (hw.h) after boot */
-static int g_prx = 0, g_ptx = PAUSE_TX_DEFAULT;
+/* PAUSE settings ('pause'): PAUSE RX = PAUSE_RX_DEFAULT, PAUSE TX = PAUSE_TX_DEFAULT (hw.h) after boot */
+static int g_prx = PAUSE_RX_DEFAULT, g_ptx = PAUSE_TX_DEFAULT;
 static u32 g_pq = 0x100, g_prf = 0x80;
 
 static void pause_apply(void)
@@ -500,8 +500,11 @@ void console_init(void)
 		else {
 			g_eng_ok = 1;
 			loop_setup(12);
-			pause_apply();        /* the boot default (PAUSE_TX_DEFAULT) */
+			pause_apply();        /* the boot defaults (PAUSE_RX_DEFAULT, PAUSE_TX_DEFAULT) */
 			if (g_ptx) xil_printf("PAUSE TX on (802.3x from the RX FIFO level; 'pause tx 0' turns it off)\r\n");
+#if PAUSE_RX_DEFAULT
+			if (g_prx) xil_printf("PAUSE RX on (the host's 802.3x PAUSE holds the engine's sending; 'pause rx 0' turns it off)\r\n");
+#endif
 			status();
 		}
 	}

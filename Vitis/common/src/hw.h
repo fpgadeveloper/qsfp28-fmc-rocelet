@@ -59,6 +59,7 @@
 #define MAC_NAME       (MAC_IS_40G ? "omac_40g" : "omac_10g")
 #define F_CLK_HZ       156250000u          /* GT TXUSRCLK2 = omac / rocelet_sys clock */
 #define HAS_FEC        0
+#define PAUSE_RX_DEFAULT 0                 /* PAUSE RX off after boot ('pause rx 1' turns it on) */
 #else
 /* VCK190: A72, hard MRMAC 100G (registers on its s_axi, port-0 page) */
 #define TARGET_NAME    "VCK190"
@@ -66,6 +67,7 @@
 #define MAC_NAME       "MRMAC"
 #define F_CLK_HZ       300000000u          /* the engine clock (data.json clk_hz), free-running */
 #define HAS_FEC        1                   /* RS-FEC CL91 RS(528,514) in the MRMAC, on after boot */
+#define PAUSE_RX_DEFAULT 1                 /* PAUSE RX on after boot (HSB at 90-95 Gb/s; 'pause rx 0' turns it off) */
 #if defined(XPAR_MRMAC_0_BASEADDR)
 #define MRMAC_BASE     XPAR_MRMAC_0_BASEADDR
 #else
@@ -76,7 +78,9 @@
 #endif
 /* PAUSE TX (802.3x frames from the engine's RX FIFO level) on after boot: a point-to-point link
  * to the host NIC, and the PS DDR window is the slower memory; 'pause tx 0' turns it off.
- * PAUSE RX (honour the host's PAUSE) stays off by default. */
+ * PAUSE RX (honour the host's PAUSE): on after boot on the VCK190 (at 90-95 Gb/s the HSB data
+ * plane overruns the host NIC unless the host can pause the engine; 'pause rx 0' turns it off),
+ * off on the ZCU106 ('pause rx 1' turns it on). */
 #define PAUSE_TX_DEFAULT 1
 #define HAS_DDR_WIN    1                   /* PS DDR window: MR 3 over the platform's buffer (plat.h) */
 #define DDR_WIN_LADDR  0x0000008000000000ull /* local address bit 39: offset into the PS DDR region */
@@ -145,6 +149,7 @@ static inline void aon_wr(u32 off, u32 v)   { Xil_Out32(AON_REGS + off, v); }
 #define TARGET_NAME    "KCU116"
 #define TARGET_ID      0x4B435531u         /* "KCU1": HSB OPS_TARGET (no always-on block on this target) */
 #define PAUSE_TX_DEFAULT 0                /* PAUSE off after boot ('pause tx 1' turns it on) */
+#define PAUSE_RX_DEFAULT 0                /* PAUSE RX off after boot ('pause rx 1' turns it on) */
 #define MAC_CMAC       1
 #define MAC_NAME       "CMAC"
 #define LINK_GBPS      100u
