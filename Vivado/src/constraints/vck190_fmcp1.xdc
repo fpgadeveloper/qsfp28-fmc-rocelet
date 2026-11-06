@@ -30,9 +30,11 @@ set_property IOSTANDARD LVCMOS15 [get_ports qsfp0_i2c_*]
 set_property SLEW SLOW [get_ports qsfp0_i2c_*]
 set_property DRIVE 4 [get_ports qsfp0_i2c_*]
 
-# GT reference clock from the Si5328 (GBTCLK0_M2C = GTY_QUAD_X1Y1 REFCLK0), 322.265625 MHz
-# (the block-design port carries FREQ_HZ; the clock is created by the gt_quad_base IP)
+# GT reference clock from the Si5328 (GBTCLK0_M2C = GTY_QUAD_X1Y1 REFCLK0), 322.265625 MHz.
+# The primary clock lets Vivado derive the GT TX / RX out clocks (and the BUFG_GT user clocks)
+# at their real rates (TIMING-26 without it: they inherit the APB clock)
 set_property PACKAGE_PIN M15 [get_ports {gt_ref_clk_0_clk_p[0]}]
+create_clock -period 3.103 -name gt_refclk0 [get_ports {gt_ref_clk_0_clk_p[0]}]
 
 # QSFP port 0 lanes 0-3 (DP0-3, GTY_QUAD_X1Y1 channels 0-3)
 set_property PACKAGE_PIN AB7 [get_ports {qsfp0_gt_gtx_p[0]}]
