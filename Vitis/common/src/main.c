@@ -39,7 +39,7 @@
 #include "hsb.h"
 #include "console.h"
 
-#define VERSION "0.5.0"
+#define VERSION "0.6.0"
 #define MAXQP   64
 
 static int g_fec = HAS_FEC, g_loop = LOOP_OFF;
