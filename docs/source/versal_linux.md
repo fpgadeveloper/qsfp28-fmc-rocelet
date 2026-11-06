@@ -66,7 +66,7 @@ shared-state cache.
 The boot: the PLM loads the device image (CIPS, NoC, DDR controller, PL), U-Boot switches the
 FMC's VADJ rail on and starts systemd-boot, which starts Linux. At boot `roceletd` checks VADJ,
 programs the Si5328 (322.265625 MHz), releases the GT, configures and releases the MRMAC with
-RS-FEC on, configures the engine with PAUSE TX on and waits for the link (the host NIC forced to
+RS-FEC on, configures the engine with PAUSE TX and PAUSE RX on and waits for the link (the host NIC forced to
 100 Gb/s, auto-negotiation off, RS-FEC). `journalctl -u roceletd` shows the same bring-up text as
 the bare-metal console.
 

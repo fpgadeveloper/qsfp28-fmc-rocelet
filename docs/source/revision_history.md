@@ -23,7 +23,9 @@ on the Cortex-A72, with the Versal hard blocks where they do better. The rocelet
   through the MRMAC's registers; the GT loopback through the quad), the Cortex-A72 platform
   case, the FMC **VADJ** enable (`vadj.c`, console and `roceletd`), the device DNA from the
   PMC's eFUSE cache for the HSB serial number; the KCU116 MicroBlaze image keeps its size
-  (the Versal code is not built for it).
+  (the Versal code is not built for it). **PAUSE RX on by default on the VCK190**
+  (`PAUSE_RX_DEFAULT` in `hw.h`; console and `roceletd`; `pause rx 0` turns it off): at 90-95 Gb/s
+  an HSB stream overruns the host unless the host's PAUSE frames can hold the board back.
 * **Linux** ([](versal_linux.md)): an AMD EDF (Yocto 2025.2) BSP for the VCK190 (GEM0 / GEM1
   PHY fix, fixed MACs, the reserved memory and UIO nodes, the MRMAC as UIO device
   `rocelet-mrmac`, 64-bit DMA addressing, the U-Boot VADJ fragment); `roceletd` maps further
@@ -59,7 +61,7 @@ VCK190 + OP120 on FMCP1, port 0, 3 m DAC to the ConnectX-6 Dx at 100000 with FEC
   window (256 MB region) host WRITE 97.85 / READ 88.94 Gb/s; `rl0` with flood ping, MTU 4200,
   SSH and TCP at 2.4-3.5 Gb/s; the web UI; the HSB device mode with NVIDIA's HSB 3.0.0 software
   (IQ16 frames into GPU memory at 76.1 Gb/s, bit-exact; 77.6 Gb/s lossless at a requested
-  95 Gb/s with `pause rx 1`, the host's PAUSE frames honoured by the MRMAC); the beamforming
+  95 Gb/s with PAUSE RX on, the host's PAUSE frames honoured by the MRMAC); the beamforming
   demo at about 63.9 Gb/s, the board named from its `TARGET` register.
 
 ### Resources and timing
@@ -80,9 +82,9 @@ clock 300 MHz, WNS +0.043 ns, WHS +0.012 ns, no critical warnings. See [](resour
 * `loop pcs` / `t pcs` use the GT near-end PMA loopback: the GTY near-end PCS loopback does not
   hold the MRMAC's link.
 * `fec 0` / `fec 1` need the host port's FEC setting to match (`encoding off` / `Auto`).
-* PAUSE RX is off by default: an HSB stream requested above the host's NIC-to-GPU limit
-  (90-95 Gb/s on the test host) overruns the host unless `pause rx 1` lets the host's PAUSE
-  frames hold the board back ([](hsb.md#measured-limits-test-host)).
+* PAUSE RX stays off by default on the KCU116: an HSB stream requested above the host's
+  NIC-to-GPU limit (90-95 Gb/s on the test host) overruns the host unless `pause rx 1` lets the
+  host's PAUSE frames hold the board back ([](hsb.md#measured-limits-test-host)).
 
 ## 2025.2 — version 0.5.0 (2026-11-05), ZCU106 target
 

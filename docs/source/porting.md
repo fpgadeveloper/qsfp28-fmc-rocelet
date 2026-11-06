@@ -124,7 +124,7 @@ the board's documentation or the [FPGA board catalog](https://boards.fpgadevelop
    CMAC's RX clock is internal to the CMAC: no omac clock constraints).
 4. **Firmware.** An `#elif defined(BOARD_<NAME>)` branch in `Vitis/common/src/hw.h`
    ([](#firmware-hwh)) with the ZCU106 branch's always-on block and PS DDR window definitions
-   and `MAC_CMAC`, `F_CLK_HZ` 322265625, `HAS_FEC` 1, `PAUSE_TX_DEFAULT`; the Si5328 at
+   and `MAC_CMAC`, `F_CLK_HZ` 322265625, `HAS_FEC` 1, `PAUSE_TX_DEFAULT`, `PAUSE_RX_DEFAULT`; the Si5328 at
    322.265625 MHz. The CMAC backend of `mac.c` reads the KCU116's QSFP0 GPIO (clock running,
    alignment, CMAC reset); on the Zynq UltraScale+ the same signals are in the always-on block
    (`STATUS`, `CTRL`), so the backend needs an always-on variant, as the omac backend has.

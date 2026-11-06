@@ -309,7 +309,7 @@ while the request stands. A host that honours PAUSE (the ConnectX-6 Dx does with
 engine is slower than the link. `pause tx 0` turns it off (`pause` without arguments shows the
 state). **PAUSE RX** (the FPGA honouring the host's PAUSE: omac `stat_rx_pause_req` → rocelet
 `mac_pause_hold` → `CTRL.PAUSE_RX_EN`) stays off by default, as in the MicroBlaze design:
-`pause rx 1`. The default is set per board in `Vitis/common/src/hw.h` (`PAUSE_TX_DEFAULT`).
+`pause rx 1` (on by default on the VCK190: [](versal_hw.md#pause-8023x)). The defaults are set per board in `Vitis/common/src/hw.h` (`PAUSE_TX_DEFAULT`, `PAUSE_RX_DEFAULT`).
 
 ## Netdev DMA channel
 
@@ -444,7 +444,7 @@ timing and measured rates per board are on [](resources.md).
 | Constraints | `zcu106.xdc` + `zcu106_impl.xdc` (40G), `zcu106_omac_10g.xdc` + `zcu106_omac_10g_impl.xdc` (10G option); pins from the FPGA board catalog (`generate_fmc_constraints OP120 ZCU106 HPC0`) |
 | PS | the board preset (`apply_board_preset`): 4 GB DDR4 SODIMM, GEM3 on the board's RJ45, SD, UART0 on the CP2108; PS DDR at PA `0x0000_0000-0x7FEF_FFFF` and `0x8_0000_0000-0x8_7FFF_FFFF` |
 | Always-on | `TARGET` `0x5A313036` ("Z106"); `CAPS` `0x07032028` (10G option `0x0702080A`) |
-| Firmware | `BOARD_ZCU106` in `Vitis/common/src/hw.h`: `F_CLK_HZ` 156250000, `HAS_FEC` 0, `PAUSE_TX_DEFAULT` 1 |
+| Firmware | `BOARD_ZCU106` in `Vitis/common/src/hw.h`: `F_CLK_HZ` 156250000, `HAS_FEC` 0, `PAUSE_TX_DEFAULT` 1, `PAUSE_RX_DEFAULT` 0 |
 | Linux | `Yocto/bsp/zcu106/` (defaults in [](zynqmp_linux.md#per-board-defaults)) |
 | Resources and timing | 96,973 LUT (42.1 %), 87 BRAM36, 16 URAM, 1,116 DSP, WNS +0.304 ns / WHS +0.007 ns; 10G option 84,198 LUT (36.5 %), WNS +0.345 ns (builds of 2026-11-05; [](resources.md)) |
 | Measured | ConnectX-6 Dx forced to 40000 / FEC off over a 3 m DAC: link up in 4.8-5.7 s (lanes in order 0-3, skew 0-1 block, 0 BIP errors), RDMA at 40G line rate into URAM and into the PS DDR window in both directions, PAUSE in both directions ([](resources.md#measured-zcu106-40g-and-10g)) |

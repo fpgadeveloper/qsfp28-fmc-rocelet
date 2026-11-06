@@ -202,6 +202,7 @@ GTY quad ready: engine clock 300000 kHz
 Port 0: link up, 100 Gb/s, RS-FEC on, loopback off (external) (2800 ms)
   PCS lanes 0-19 block lock 0xFFFFF | RS-FEC lane lock 0-3 1111 aligned 1 mapping 0 | ...
 PAUSE TX on (802.3x from the RX FIFO level; 'pause tx 0' turns it off)
+PAUSE RX on (the host's 802.3x PAUSE holds the engine's sending; 'pause rx 0' turns it off)
 ```
 
 The commands are those of [](console.md) (VCK190 differences in

@@ -170,7 +170,7 @@ reset:
 | `MODE_REG` (0x008) | data rate 100G, serdes width "100G wide", AXI-Stream mode "100G independent 384-bit", statistics latched by `TICK_REG` |
 | `FEC_CONFIGURATION_REG1` (0x0D0) | `0x1008` = RS(528,514) Clause 91 (`fec 1`, the default), `0x0` = no FEC (`fec 0`) |
 | `CONFIGURATION_RX_MTU` (0x014) | maximum frame length 9600 bytes with the FCS (as the other MACs of the design) |
-| PAUSE registers (0x05C-0x0C4) | transmit quanta and refresh interval (`pause quanta` / `refresh`, defaults 0x100 / 0x80), the PAUSE frame's source address (the port's MAC address), destination 01:80:C2:00:00:01 and type 0x8808, and the receive recognition of PAUSE frames (enabled with `pause rx 1`) |
+| PAUSE registers (0x05C-0x0C4) | transmit quanta and refresh interval (`pause quanta` / `refresh`, defaults 0x100 / 0x80), the PAUSE frame's source address (the port's MAC address), destination 01:80:C2:00:00:01 and type 0x8808, and the receive recognition of PAUSE frames (enabled by PAUSE RX, on after boot; `pause rx 0` turns it off) |
 | `CONFIGURATION_TX_REG1` (0x00C) / `CONFIGURATION_RX_REG1` (0x010) | after the reset release: enable, FCS insertion (TX) / FCS check and removal (RX), 12-byte inter-frame gap, preamble and SFD checks |
 | `TICK_REG` (0x02C) | 1: latch the statistics |
 
@@ -271,19 +271,20 @@ Results in the PMA loopback: `t pma` **SELFTEST PASS 19/19**, `t full pma` **23/
 throughput tests through the engine's own responder reach 95.70 Gb/s (WRITE, 4 KB, one QP) and
 97.89 Gb/s payload (WRITE, 64 KB, four QPs; 100.00 Gb/s on the line with the ACKs); a 1024-byte
 WRITE takes 433 ns from the engine's transmit to its receive side through the MRMAC, RS-FEC and
-the loopback. With PAUSE RX off (the self-test default) the PAUSE frames the engine sends come
-back unheard, and the line-rate WRITE test at PMTU 1024 recovers a few losses by go-back-N
-(the test passes); with `pause rx 1` it is lossless.
+the loopback. With PAUSE RX off (`pause rx 0`) the PAUSE frames the engine sends come back
+unheard, and the line-rate WRITE test at PMTU 1024 recovers a few losses by go-back-N (the test
+passes); with PAUSE RX on (the default) it is lossless.
 
 ### PAUSE (802.3x)
 
-As on the Zynq UltraScale+ design, the consoles (bare metal and `roceletd`) start with
-**PAUSE TX on** and PAUSE RX off (`PAUSE_TX_DEFAULT` 1): the engine asks for PAUSE when its
+The consoles (bare metal and `roceletd`) start with **PAUSE TX on** and, unlike the Zynq
+UltraScale+ design, **PAUSE RX on** (`PAUSE_TX_DEFAULT` 1, `PAUSE_RX_DEFAULT` 1): the engine asks for PAUSE when its
 receive FIFO passes the XOFF level, and the MRMAC sends PAUSE frames (quanta 0x100, refresh
 0x80) while the request stands, so that a host that honours PAUSE (the ConnectX-6 Dx does by
 default) slows down instead of losing frames when the memory behind the engine is slower than
-the link. `pause tx 0` turns it off, `pause rx 1` makes the FPGA honour the host's PAUSE frames
-([Zynq UltraScale+ page](zynqmp_hw.md#pause-8023x)).
+the link, and the FPGA honours the host's PAUSE frames: at 90-95 Gb/s an HSB stream overruns the
+host unless the host can hold the board back ([](hsb.md#measured-limits-test-host)). `pause tx 0`
+and `pause rx 0` turn them off ([Zynq UltraScale+ page](zynqmp_hw.md#pause-8023x)).
 
 Measured against the ConnectX-6 Dx (its link pause on, the default):
 
@@ -394,7 +395,7 @@ timing and measured rates per board are on [](resources.md).
 | Constraints | `vck190_fmcp1.xdc` + `vck190_fmcp1_impl.xdc` (the fabric clocks and the GT clocks as asynchronous groups, the rocelet_sys and clock-guard crossings); pins from the FPGA board catalog (`generate_fmc_constraints OP120 VCK190 FMCP1`) |
 | CIPS | Cortex-A72, PS UART0 (console), GEM0 + GEM1 (GEM0 = the RJ45 next to the USB connectors; the third RJ45 belongs to the system controller), SD1, QSPI, LPD I2C0 + I2C1; the NoC with one DDR4 controller on the 8 GB DIMM: Linux memory 2 GB at PA `0x0000_0000` + 6 GB at `0x500_0000_0000` |
 | Always-on | `TARGET` `0x56434B31` ("VCK1"); `CAPS` `0x07044064` |
-| Firmware | `BOARD_VCK190` in `Vitis/common/src/hw.h`: `MAC_MRMAC`, `F_CLK_HZ` 300000000 (the engine clock), `HAS_FEC` 1, `PAUSE_TX_DEFAULT` 1, `HAS_VADJ`, `HAS_PLAT_DNA`; MRMAC registers at `0x8013_0000` |
+| Firmware | `BOARD_VCK190` in `Vitis/common/src/hw.h`: `MAC_MRMAC`, `F_CLK_HZ` 300000000 (the engine clock), `HAS_FEC` 1, `PAUSE_TX_DEFAULT` 1, `PAUSE_RX_DEFAULT` 1, `HAS_VADJ`, `HAS_PLAT_DNA`; MRMAC registers at `0x8013_0000` |
 | Linux | `Yocto/bsp/vck190_fmcp1/` (defaults in [](versal_linux.md#per-board-defaults)) |
 | Resources and timing | 88,574 LUT (9.8 %), 119,805 FF, 103 BRAM36, 16 URAM, 1,115 DSP (56.7 %), WNS +0.043 ns / WHS +0.012 ns, engine clock 300 MHz (build of 2026-11-06; [](resources.md)) |
 | Measured | ConnectX-6 Dx at 100000 with FEC `Auto` (RS) over a 3 m DAC: link up with RS-FEC in 2.0-6.7 s (PCS lanes 0-19 and RS-FEC lanes 0-3 locked, aligned), `t pma` 19/19, host WRITE / READ / SEND 97.5 / 96.3 / 91.8 Gb/s and FPGA WRITE with immediate 93.5 Gb/s into host memory (PMTU 4096), PS DDR window 79.4 / 79.2 Gb/s (host WRITE / READ) lossless with PAUSE TX, 0 uncorrectable codewords ([](resources.md#measured-vck190_fmcp1-100g)) |

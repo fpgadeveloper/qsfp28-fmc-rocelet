@@ -182,7 +182,7 @@ places.
 | Board I/O | 300 MHz system clock (`default_sysclk1_300`) and reset, USB-UART (CP2105, second port) from the board files |
 | Memory | DDR4 (soldered components, 1 GB / 32 bit, not a socket): not used by this design |
 | Constraints | `Vivado/src/constraints/kcu116.xdc`; pins from the FPGA board catalog (`generate_fmc_constraints OP120 KCU116 HPC`) |
-| Firmware | the `#else` (default) branch of `Vitis/common/src/hw.h`, taken by every board that is not `BOARD_ZCU106`: `F_CLK_HZ` 322265625, `HAS_FEC` 1, `PAUSE_TX_DEFAULT` 0, the QSFP0 GPIO; another MicroBlaze board adds its own `#elif defined(BOARD_<NAME>)` branch ([](porting.md#firmware-hwh)) |
+| Firmware | the `#else` (default) branch of `Vitis/common/src/hw.h`, taken by every board that is not `BOARD_ZCU106`: `F_CLK_HZ` 322265625, `HAS_FEC` 1, `PAUSE_TX_DEFAULT` 0, `PAUSE_RX_DEFAULT` 0, the QSFP0 GPIO; another MicroBlaze board adds its own `#elif defined(BOARD_<NAME>)` branch ([](porting.md#firmware-hwh)) |
 | Configuration flash | `rocelet_boot.mcs` (data.json `flashsize` 128, `flashintf` SPIx4) |
 | Resources and timing | 69,178 LUT (31.9 %), 99,975 FF, 98 BRAM36, 16 URAM, 1,119 DSP (61.3 %), WNS +0.023 ns / WHS +0.006 ns at the CMAC user clock (version 0.5.0, [](resources.md)) |
 | MicroBlaze console | 130,664 of the 130,992 bytes of local memory (328 B free) |

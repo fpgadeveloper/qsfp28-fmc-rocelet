@@ -189,13 +189,14 @@ numbers belong to that host, not to the design: the board sends 97.6 Gb/s unpace
 | Data-plane start after an idle GPU | a 1-3 s `--start-delay` at 80 Gb/s cost 420,000-550,000 NIC discards and damaged frames: the idle GPU had dropped to its lowest PCIe link speed (Gen1) |
 | Link drop (console `link`) during 40 Gb/s | producer paused ~7 s (relink, partner link-up, 2 s grace), 0 frames lost, 1 resync |
 | RoCE receiver into GPU memory, VCK190, `--rate 90` / `95` | the host overruns (NIC discards, damaged frames), as on the KCU116 |
-| Same, VCK190, `--rate 95` with `rl pause rx 1` on the board | 77.6 Gb/s, every frame checked, 0 NIC discards: the ConnectX-6 Dx sent 802.3x PAUSE frames (55,650 in the run) and the FPGA honoured them |
+| Same, VCK190, `--rate 95` with PAUSE RX on at the board (the default; `rl pause rx 1`) | 77.6 Gb/s, every frame checked, 0 NIC discards: the ConnectX-6 Dx sent 802.3x PAUSE frames (55,650 in the run) and the FPGA honoured them |
 
 ```{tip}
 To stream above the host's NIC-to-GPU limit without losses, let the host hold the board back:
-turn PAUSE RX on at the board (`rl pause rx 1` on the Linux images, `pause rx 1` on a console;
-it is off by default) and keep the host port's link pause on (`ethtool -A <if> rx on tx on`,
-the ConnectX-6 Dx default). The NIC then sends PAUSE frames when its receive buffer fills, and
+PAUSE RX at the board (on by default on the VCK190; `rl pause rx 0` on the Linux images,
+`pause rx 0` on a console turns it off; off by default on the KCU116 and the ZCU106: `rl pause
+rx 1` / `pause rx 1`) and the host port's link pause on (`ethtool -A <if> rx on tx on`, the
+ConnectX-6 Dx default). The NIC then sends PAUSE frames when its receive buffer fills, and
 the stream settles at the rate the host can take instead of overrunning it. Measured on the
 VCK190 (MRMAC).
 ```
