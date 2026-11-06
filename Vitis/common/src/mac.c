@@ -332,6 +332,14 @@ int mac_relink(int fec, int loop)
 	fec = 0;
 	if (loop == LOOP_PCS) loop = LOOP_PMA;      /* omac: GT loopback is near-end PMA */
 #endif
+#if defined(MAC_MRMAC)
+	/* GTY near-end PCS loopback does not hold the MRMAC 100G link (VCK190, 2026-11-06: ~190 link
+	 * drops/s, local fault, RS-FEC uncorrectable blocks; near-end PMA is clean): use PMA */
+	if (loop == LOOP_PCS) {
+		xil_printf("note: GT near-end PCS loopback does not hold the MRMAC link: using near-end PMA\r\n");
+		loop = LOOP_PMA;
+	}
+#endif
 	g_mac_ctl = (g_mac_ctl & ~(MC_RSFEC | (7u << MC_LOOP_SH))) | (fec ? MC_RSFEC : 0) |
 		    ((u32)(loop & 7) << MC_LOOP_SH);
 	int ms = link_loop();
