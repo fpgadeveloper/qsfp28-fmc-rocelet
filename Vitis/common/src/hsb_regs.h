@@ -22,7 +22,10 @@
 #define OPS_STATUS_LINK_PAUSED  0x04u       /*     [2] producer paused because the link went down */
 #define OPS_STATUS_LPAUSE_EN    0x08u       /*     [3] link pause enabled (console 'hsb lpause on|off', default on) */
 #define OPS_STATUS_KA_ARMED     0x10u       /*     [4] keepalive watchdog armed (KEEPALIVE_TIMEOUT_MS != 0) */
-/* 0x7F000018, 0x7F00001C: reserved, read 0, writes ignored */
+#define OPS_LINK_GBPS           0x7F000018u /* RO  the link rate of this target in Gb/s (100 KCU116, 40 ZCU106 omac_40g,
+                                                  10 omac_10g option); 0 on consoles before 0.5.0. Host apps cap their
+                                                  stream rate at it (sw/beam: keys - / +, the page's rate) */
+/* 0x7F00001C: reserved, read 0, writes ignored */
 #define OPS_KEEPALIVE_TIMEOUT_MS 0x7F000020u /* RW  0 = watchdog off (default). While the data plane is enabled the
                                                   producer stops when no KEEPALIVE write arrived for this many ms.
                                                   A write restarts the timer. Back to 0 at an HSB reset (0x4 bit 3),

@@ -1,5 +1,133 @@
 # Revision history
 
+## 2025.2 — version 0.5.0 (2026-11-05), ZCU106 target
+
+A second target, **`zcu106`**: the ZCU106 with the 2x QSFP28 FMC (OP120) on HPC0, QSFP28 port 0
+at **40 Gb/s**, entirely license-free. The Zynq UltraScale+ has no hard 100G MAC, so the link
+runs on the new open-source Ethernet MACs of
+[opsero-ethernet-mac](https://omac.ethernetfmc.com) v0.1.0 (`omac_40g`, 40GBASE-R4; `omac_10g`,
+10GBASE-R, as a build option), and the engine is rocelet v0.3.0, whose MAC side now takes
+256-bit and 64-bit MACs. The design is built for the Zynq UltraScale+ processing system: Linux
+on the Cortex-A53 runs the control plane (or a bare-metal A53 console), so that it also serves
+as the starting point for the RFSoC boards ([](porting.md)). The kcu116 target keeps its
+function; its CMAC now sits behind the same generic MAC boundary. Validated on hardware
+against an NVIDIA ConnectX-6 Dx forced to 40G (and 10G) with FEC off, in the same test host
+as 0.4.0.
+
+### Changes
+
+* **zcu106 hardware** ([](zynqmp_hw.md)): `mac0` = omac_40g on the four GTH transceivers of
+  QSFP28 port 0 (the free transceiver wizard, generated from the omac submodule at build time),
+  256-bit AXI-Streams at 156.25 MHz; the engine at 512 bits with rocelet's width converters at
+  the MAC boundary. An **always-on register block with a clock guard** (`rsys_aon`): GT / MAC
+  resets, link and lane status, QSFP module lines, the measured MAC clock, one aggregated
+  interrupt, and a guard that completes every CPU access to the MAC clock domain (poison value
+  `0xDEADC10C` while the clock is stopped) so the A53 can never hang or take an SError there.
+  A **PS DDR window** next to the 256 KB URAM window: one region given at run time
+  (`C_DDR_BASE` / `C_DDR_SIZE`, a null target outside it), spread over **two HP ports per
+  direction** (`rsys_axi_ilv`, 512-byte granules) to carry 40G. A **netdev DMA channel**
+  (`rsys_odma` + AXI DMA in scatter-gather mode) carries every non-RoCE frame to and from Linux.
+  A **streaming source boundary** for the HSB producer (`s_axis_src` + `rsys_src_mux`, input 3
+  reserved for a design source such as an RF-ADC stream). Port 1's lanes are reserved.
+* **10G option**: the same label builds with omac_10g on QSFP lane 0
+  (`python3 config/update.py --mac zcu106=omac_10g`; constraints `zcu106_omac_10g*.xdc`).
+* **Generic MAC boundary** in `rocelet_sys` (`mac_ctl`, `mac_pz`, `mac_addr`, `mac_stat`,
+  `mac_ev`, `mac_pause`, AXI-Streams at `MAC_WIDTH`); the kcu116's CMAC connects through
+  `mac_cmac_adapt`, the ZCU106's omac through `mac_omac40g` / `mac_omac10g`. `rsys_ptime` takes
+  the clock frequency as a parameter.
+* **Firmware**: one source tree for the KCU116 MicroBlaze console, the ZCU106 A53 bare-metal
+  console and the Linux daemon (a platform layer `plat.c`, MAC backends in `mac.c`); one ZCU106
+  binary for both MACs (MAC type and rate from the always-on `CAPS`); the 40G lane line in `st`;
+  the engine's `PAUSE_RX_LEVEL` and `PAUSE_QCLK` for omac; **PAUSE TX on after boot on the
+  ZCU106** (point-to-point link; the KCU116 default stays off); memory window `mr=3` over PS DDR
+  with `ddr`, `ddr fill`, `ddr check`; the Opsero HSB register **`LINK_GBPS`** (0x7F000018: 100,
+  40 or 10).
+* **Linux** ([](zynqmp_linux.md)): an AMD EDF (Yocto 2025.2) image with the daemon `roceletd`
+  (owns the hardware through UIO and i2c-dev, runs the console sources), the command line `rl`,
+  the network driver `rl_net.ko` (interface `rl0`: Linux owns the port's IP address, RoCE v2
+  stays in hardware), a web UI on port 80, a 256 MB `reserved-memory` region for the PS DDR
+  window (UIO, PYNQ-compatible), the HSB control plane on UDP sockets over `rl0`, QP records over
+  SSH. `rl0` takes an MTU up to 9578 and reports its statistics through `ethtool -S`. The web UI
+  has an optional access token (`token` in `/etc/rocelet/rocelet-web.conf`; empty by default,
+  and the page then warns that anybody on the network can control the design).
+* **Host software**: the beamforming demo reads `LINK_GBPS` and limits its rate range to the
+  link (1-40 Gb/s on the ZCU106); its window header and page name the board and link from it
+  (`ZCU106 -> 40G RoCE -> GPU`, `KCU116 -> 100G RoCE -> GPU`; `--board` for a ported board).
+* **Fixes**: the console's counter-name table had 48 of 56 entries (a NULL read when the new
+  netdev / PS DDR counters were non-zero; a crash in the daemon); the Si5328 reset write is no
+  longer reported as a failure under the Linux I2C driver; the A53 console writes its PS DDR
+  buffer's cache lines back at start-up (a dirty line could overwrite the first beat of the
+  first host WRITE).
+* **GT placement in data.json**: the transceiver channels of the QSFP28 port (`gt_channels`,
+  QSFP lane order), the omac reference clock (`gt_refclk`) and the CMAC site (`cmac_core`) are
+  target attributes instead of literals in `build.tcl` / `bd_microblaze.tcl`; the
+  `mac_omac40g` lane map `CH_OF_LANE` is derived from the same list. A new board is a data.json
+  entry and its constraints ([](porting.md#gt-placement-in-datajson)). Both targets build
+  to the same transceiver configuration as before.
+* **Simulation**: the system testbench (`run_xsim.sh`) also runs through a narrow MAC
+  (`MAC_WIDTH=64` or `256`: rocelet's width converters, as on the ZCU106) and with the Zynq
+  UltraScale+ options (`ZU=1`: PS DDR window over two ports per direction and netdev DMA channel,
+  tests `ddr` and `odma`; `DDRP=1` for a one-port window); new testbenches `tb_aon` (always-on
+  block and clock guard, `run_xsim_aon.sh`) and `tb_axi_ilv` (the two-port PS DDR interleave,
+  ordering and throughput, `run_xsim_ilv.sh`).
+* **Build**: `Vivado/scripts/xsa.tcl` puts the bitstream into the XSA (exported from the routed
+  checkpoint when the project-mode export cannot see it); `build.py` updated to the common
+  build runner of the Opsero reference designs, with the `yocto` stage (the zcu106 Linux image)
+  and `package` gathering the standalone and Yocto zips.
+* **Submodules**: rocelet v0.3.0 (generic MAC side, `MAC_WIDTH`, `LINK_GBPS`, `CLK_KHZ`,
+  `PAUSE_QCLK`, capability registers), opsero-ethernet-mac v0.1.0 (new).
+* **Docs**: getting started and host setup per target; the hardware pages organised by design
+  family, named after the build flow's family token: [](hardware.md) (a per-target table
+  generated from data.json), [](microblaze_hw.md), [](zynqmp_hw.md) and [](zynqmp_linux.md),
+  each written board-agnostically with a **Board specifics** subsection per board (the template
+  for a new board, [](porting.md)); [](description.md) now covers the shared `rocelet_sys`; a
+  generated block diagram of the Zynq UltraScale+ design (`rocelet-zynqmp-block.png`), the
+  MicroBlaze diagram updated (`cmac_adapt`, `u_smux`); the ZCU106 measurements on
+  [](resources.md).
+
+### Measured (2026-11-04)
+
+ZCU106 + OP120 port 0, 3 m DAC to the ConnectX-6 Dx forced to 40000, FEC off, MTU 4200; the
+Linux image unless stated. Every figure: [](resources.md#measured-zcu106-40g-and-10g).
+
+* Link on the first attempt (4.8-5.7 s), lanes in order, 0 BIP errors; `rl t pma` SELFTEST PASS
+  19/19 (also with the 10G option).
+* RDMA payload at 40G: FPGA WRITE with immediate 38.83 Gb/s, host WRITE 38.74, host SEND 39.20,
+  host READ 38.73 (line rate also at PMTU 1024 and 512), host WRITE into the PS DDR window 38.75
+  and READ of it 38.74, lossless without PAUSE frames.
+* PAUSE both ways: 174,494 PAUSE frames sent by the FPGA (one-port PS DDR layout) all honoured
+  by the ConnectX-6 Dx; the host's PAUSE frames held the FPGA's stream (38.78 → 23.89 Gb/s,
+  0 lost).
+* `rl0`: flood ping 20000 x 1400 B with 0 % loss; HSB IQ16 / counter frames into GPU memory at
+  39.0 / 38.96 Gb/s, every frame checked, 0 lost; beamforming demo at the 40 Gb/s cap; web UI.
+* 10G option: RDMA 9.44-9.80 Gb/s, PS DDR window 9.13-9.80 Gb/s.
+
+### Resources and timing
+
+zcu106: **96,973 LUT (42.1 %)**, 87 BRAM36, 16 URAM, 1,116 DSP on the XCZU7EV-2, WNS +0.304 ns,
+WHS +0.007 ns, no critical warnings; the 10G option 84,198 LUT, WNS +0.345 ns. kcu116 after the
+MAC-boundary refactor: 69,178 LUT, WNS +0.023 ns. See [](resources.md).
+
+### Limitations
+
+* **kcu116**: rebuilt with rocelet v0.3.0 and the generic MAC boundary (the simulation regression
+  passes at 512 bits and the build closes timing), but this release was validated on hardware
+  with the ZCU106 only; the KCU116 measurements are those of 0.3.0 / 0.4.0. Its MicroBlaze
+  console has 328 bytes of local memory left.
+* **zcu106**: the host port must be forced to 40G (10G) with auto-negotiation and FEC off.
+  OP120 port 1 is not used.
+* omac_40g: back-to-back frames whose length without FCS is 1-7 bytes past a multiple of 32
+  cannot run at the full 40.0 Gb/s (RoCE traffic is not affected; the always-on `RX_OVF`
+  counter shows cut or dropped frames).
+* The PS DDR window carries 40G with two HP ports per direction; at 100G (a future RFSoC CMAC
+  target) it would need more ports or keep line-rate traffic in URAM.
+* `rl0` is a control and convenience interface, not a fast NIC: TCP into the board measured
+  2.2 Gb/s with an untuned receiver, and frames arriving while Linux has no free receive buffer
+  are dropped by the PL (counted; TCP recovers).
+* The 10G option is a manifest option: no prebuilt image is published for it.
+* PAUSE TX is on by default on the ZCU106: the host must honour 802.3x PAUSE (the ConnectX-6 Dx
+  does by default) or `pause tx 0` must be set.
+
 ## 2025.2 — version 0.4.0 (2026-11-03), beamforming demo
 
 A phased-array **beamforming demo** on top of the Holoscan Sensor Bridge device mode: an 8 x 8

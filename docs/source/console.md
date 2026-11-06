@@ -1,9 +1,13 @@
 # Console
 
-The MicroBlaze application (`Vitis/common/src/`) offers a console on the KCU116's USB-UART at
-**115200 baud, 8N1**. At power-up it programs the Si5328 (GT reference clock 322.265625 MHz),
+The console application (`Vitis/common/src/`) runs on the KCU116's MicroBlaze and, built for the
+Cortex-A53, on the ZCU106 (bare metal, or inside the Linux daemon as `rl <command>`); the
+differences of the ZCU106 are in [the last section](#zynq-ultrascale-cortex-a53-bare-metal-console). On
+the KCU116 it offers a console on the board's USB-UART at **115200 baud, 8N1**. At power-up it programs the Si5328 (GT reference clock 322.265625 MHz),
 brings up the CMAC (RS-FEC on), configures the engine for loopback (see below) and prints the
-status. Commands that need the engine are refused while the CMAC user clock is stopped.
+status. Commands that need the engine are refused while the CMAC user clock is stopped (only
+`fec`, `loop`, `link`, `st`, `rd`, `wr` and the help work then). `help` or `?` (or any unknown
+command) prints the command list.
 
 ## Status and link
 
@@ -14,9 +18,9 @@ status. Commands that need the engine are refused while the CMAC user clock is s
 | `fec 0\|1` | RS-FEC off / on, then relink (the host must use the same setting) |
 | `loop off\|pcs\|pma` | GT near-end loopback (PCS or PMA) or none, then relink |
 | `link` | reset the CMAC and wait for the link |
-| `pause [rx 0\|1] [tx 0\|1] [xoff n] [xon n] [quanta n] [refresh n]` | 802.3x PAUSE: honour received PAUSE frames (rx), send PAUSE from the RX FIFO level (tx; XOFF / XON levels in 64-byte beats of the 512-beat RX FIFO, default 128 / 64); default off. The host's link pause must match (`ethtool -A <if> rx on tx on`) |
+| `pause [rx 0\|1] [tx 0\|1] [xoff n] [xon n] [quanta n] [refresh n]` | 802.3x PAUSE: honour received PAUSE frames (rx), send PAUSE from the RX FIFO level (tx; XOFF / XON levels in 64-byte beats of the 512-beat RX FIFO, default 128 / 64); default off on the KCU116, **PAUSE TX on (rx off) on the ZCU106**. The host's link pause must match (`ethtool -A <if> rx on tx on`) |
 | `vlan rx 0\|1`, `vlan tx 0\|1 [pcp] [vid]` | accept 802.1Q VID-0 priority tags (default on); tag the frames sent (default off: only for a host whose QP is tagged too; a NIC may drop tagged RoCE frames on an untagged QP) |
-| `ip <a.b.c.d>`, `mac <12 hex digits>` | the FPGA's address (default 192.168.20.2, 02:0a:35:72:6c:01). `mac` also clears the counters and the error latch and turns the requester rate limit off (`pace 0`, burst 16 KB); the other engine settings stay (`setup` restores them all) |
+| `ip <a.b.c.d>`, `mac <12 hex digits>` | the FPGA's address (the bare-metal consoles' defaults are 192.168.20.2 and 02:0a:35:72:6c:01; on the ZCU106 Linux image the engine takes the address and MAC of `rl0`, and `ip` / `mac` change `rl0`, [](zynqmp_linux.md#rl0-and-the-engine-share-one-address)). `mac` also clears the counters and the error latch and turns the requester rate limit off (`pace 0`, burst 16 KB); the other engine settings stay (`setup` restores them all) |
 | `to <us>` | requester ACK timeout (default 5 ms, rocelet's reset value since v0.2.1; with the retry count 7 a QP gives up after 8 timeouts in a row = 40 ms without an ACK while the link is up, which covers a ConnectX-6 that goes silent 15-25 ms before the FPGA loses alignment when the host reconfigures its port). 0 to 1,048,575 us (20-bit register); a larger value is refused with an error message and the setting is not changed. `setup` and the tests put it back to 5 ms |
 | `grace [us]` | how long the requester's ACK timeouts stay held after the link comes back (rocelet `LINK_GRACE`, timer ticks = microseconds; 0 to 16,777,215, i.e. up to 16.7 s; 0 = no grace; default 2,000,000 = 2 s; a larger value is refused with an error message and the setting is not changed). Without an argument: the value, the link and hold state, link drops and ACK timeouts. `setup` and the tests keep the value set here |
 | `pace <Gb/s> [burst]` | requester rate limit over all QPs (rocelet `PACE_RATE` / `PACE_BURST`; wire bytes = payload + 98 per packet; 0 = off, the default) |
@@ -64,13 +68,13 @@ pull or a link-partner reset of any length on the FPGA side: when the hold ends,
 ACK became overdue retransmits its window once (go-back-N). Why 2 s: the remote fault keeps the
 hold on until the link partner receives the FPGA's signal, so the grace starts at the partner's
 own link-up (a ConnectX-6 Dx: 4.4-5.6 s after a CMAC reset, the engine's link within 0.22 s of
-its carrier); grace 0, 1 s and 3 s all survived 5 s forced drops on the bench, and 2 s leaves
-margin for a partner whose port is up before its RDMA stack answers (console 0.2.1 used 6 s).
+its carrier), and 2 s leaves margin for a partner whose port is up before its RDMA stack
+answers.
 The cost: after a link loss with data in flight a QP whose ACKs were lost waits up to the grace
 after the partner is back before it retransmits (a NAK from the host ends the wait earlier).
 The engine's link-drop counter (`st`, `grace`) counts every fault toggle, so one physical drop
 usually counts 2-3 times (the CMAC's own counter: once). The host's side of the connection
-is governed by the host QP's own `timeout` / `retry_cnt` ([Host setup and host rules](https://rocelet.ethernetfmc.com/host-setup.html)
+is governed by the host QP's own `timeout` / `retry_cnt` ([Host setup and host rules](https://rocelet.ethernetfmc.com/en/latest/host-setup.html)
 in the rocelet docs, "Link flaps and cable pulls").
 
 Memory windows offered to the host: `mr=1` is the 256 KB on-chip memory window (read/write),
@@ -85,7 +89,8 @@ region (writes are checked against the pattern, reads return it).
 | `wg <op> <len> <count> [gap] [qp]` / `wg stop` | self-test generator: line-rate WRs with a pattern payload into the RLHM window (`count` 0 = until stopped) |
 | `cq` | print and remove the queued work completions and receive completions |
 | `rnr <mask>` | QPs (bit mask) without receive buffers: SENDs to them are answered with RNR NAKs |
-| `peek <addr> [n]`, `poke <addr> <val>` | read / write 32-bit words of the memory window |
+| `peek <addr> [n]`, `poke <addr> <val>` | read / write 32-bit words of the memory window (`peek` at most 64 words) |
+| `fill [addr] [len]` | write the payload pattern (pattern(address), the seed of the `RLF` record) into the memory window from `addr` (rounded down to 64 bytes, default 0) for `len` bytes (default and limit: to the end of the window), so that a host reader (`rocelet_host --role reader`) can check what it READs |
 
 `op` is `write`, `write_imm`, `send`, `send_imm`, or a number: bits [3:0] the opcode (0-3 as
 listed), 0x10 the solicited event, 0x20 the HSB metadata flag.
@@ -103,7 +108,7 @@ queue pairs are then connected to each other (QP q to QP q^1), and the firmware 
 |---------|--------|
 | `t` | the suite: link, loopback path, ARP/ICMP, firmware WRs through the memory window, READ (single and multi-packet, duplicate), ICRC (bad frames counted and dropped), CNP and 802.1Q tags in host frames, WRITE / SEND / WRITE-imm / SEND-imm streams, TX/RX fault injection (go-back-N recovery), access error |
 | `t full` | the suite plus READ at PMTU 1024, throughput and latency |
-| `t [full] pma` | the same in the GT near-end PMA loopback, then back to the previous loopback mode: no plug needed, a cable to a NIC may stay connected |
+| `t [full] pma`, `t [full] pcs` | the same in the GT near-end PMA (or PCS) loopback, then back to the previous loopback mode: no plug needed, a cable to a NIC may stay connected (on the ZCU106 `pcs` selects the PMA loopback too) |
 | `arp`, `wrq`, `read <len> <pmtu_log2>`, `icrc`, `cnpvlan`, `access` | single tests |
 | `write <len> <pmtu_log2> <n> [op]`, `tput <len> <pmtu_log2> <ms> [nqp]`, `lat <n> <len> <pmtu_log2>` | streams, throughput, latency |
 | `inj <rx> <1 drop\|2 corrupt> <class> <skip> <count> <nwr> <len> <pmtu_log2>` | fault injection run (class bits: 1 request, 2 ACK, 4 NAK, 8 READ response) |
@@ -138,3 +143,42 @@ runs with every engine frame tagged (VID 0).
 | `rnrt [min_us] [max_us]` | clamp of the RNR wait decoded from a received RNR NAK's timer code (default 10 us .. 655 ms) |
 | `rcont [0\|1]` | answer a partial READ re-issue as a continuation of the original response (MIDDLE ... LAST, default, what the ConnectX-6 Dx expects) or with a new FIRST / ONLY response (IBTA style) |
 | `rd <addr> [n]`, `wr <addr> <val>` | raw AXI access |
+
+## Zynq UltraScale+ (Cortex-A53 bare-metal console)
+
+The same sources (`Vitis/common/src`) build the KCU116 MicroBlaze console and a Cortex-A53
+standalone console for the `zcu106` target (40G, omac_40g; and its 10G option with omac_10g);
+the differences live in a thin platform layer (`plat.c`: console UART and time base) and in the
+MAC backend (`mac.c`: CMAC or omac). **One ZCU106 console binary runs on both bitstreams**: it
+reads the MAC type and the link speed from the always-on block's `CAPS`. The Linux daemon
+`roceletd` runs the same console code ([](zynqmp_linux.md)), so every command below also works
+as `rl <command>`.
+
+| | MicroBlaze (`kcu116`) | Zynq UltraScale+ (`zcu106`) |
+|---|---|---|
+| CPU, console | MicroBlaze, AXI UART 16550 on the board's USB-UART | Cortex-A53 #0, PS UART0 (CP2108 port 0), 115200 8N1 |
+| Boot | `rocelet_boot.bit` over JTAG or configuration flash | `BOOT.BIN` (FSBL + bitstream + console) from SD, or over JTAG from the Vitis workspace ([](getting_started.md#run-the-bare-metal-console)) |
+| MAC, link | 100G CMAC, RS-FEC on by default | omac_40g 40GBASE-R4 on QSFP lanes 0-3 (10G option: omac_10g 10GBASE-R on QSFP lane 0); no FEC (`fec` has no effect) |
+| GT reference clock | Si5328 322.265625 MHz | Si5328 156.25 MHz |
+| Loopback | `loop pcs` / `loop pma` | `loop pma` (GTH near-end PMA; `pcs` selects PMA too) |
+| MAC control and status | QSFP0 AXI GPIO | the always-on block ([](zynqmp_hw.md)): GT / MAC resets, link status, the measured MAC clock in `st`; at 40G also a lane line (block lock, marker lock, the partner's lane order, skew, BIP errors per lane, failed alignments, RX overflows) in `st` and after every link attempt |
+| Engine settings | | `CTRL.PAUSE_RX_LEVEL` = 1 (omac reports a received PAUSE as a level), `PAUSE_QCLK` 512 (40G) / 2048 (10G), `TICK_DIV` 156 |
+| PAUSE | off | **PAUSE TX on after boot** (802.3x frames from the engine's RX FIFO level: lossless into PS DDR; the host must honour PAUSE, the ConnectX-6 Dx does by default); PAUSE RX off; `pause tx 0` / `pause rx 1` change it |
+| Extra memory window | | `mr=3`: a 1 MB buffer in PS DDR through the PS DDR window (R_Key `0x4003`, VA 0; under Linux the 256 MB reserved region); commands below |
+
+PS DDR window commands (Zynq UltraScale+ only):
+
+| Command | Action |
+|---------|--------|
+| `ddr` | the region (physical address, size, MR 3 R_Key), the DDR burst counters (writes, reads, outside the region) and the first eight words |
+| `ddr fill [off] [n]` | write pattern(offset) into `n` bytes from offset `off`, for a host reader of `mr=3`, then clean the cache lines |
+| `ddr check [off] [n]` | after a host WRITE into `mr=3`: invalidate the cache lines and compare `n` bytes from `off` with pattern(offset); prints the number of 64-byte beats that differ and the first one (`rl ddr check` exits with status 1 on a mismatch) |
+
+`off` and `n` are rounded down to 64 bytes; `off` defaults to 0 and `n` to the rest of the
+buffer, and both are clipped to it.
+
+At power-up the console holds the GTH and the MAC in reset, programs the Si5328, releases the
+GTH (prints "GTH ready: MAC clock 156250 kHz"), releases the MAC and waits for the link. The
+host port must be forced to 40 Gb/s (10 Gb/s with the 10G option) with auto-negotiation and
+FEC off (the console prints the `ethtool` lines for the speed of the bitstream). `wg` rates:
+`gap = len x 8 / rate x 156.25e6` clocks at both speeds.

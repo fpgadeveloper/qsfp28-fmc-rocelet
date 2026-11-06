@@ -1,0 +1,104 @@
+// SPDX-License-Identifier: MIT
+// Copyright (C) 2026, Opsero Electronic Design Inc.  All rights reserved.
+
+/*
+ * qsfp28-fmc-rocelet, ZCU106 (zcu106): fixups layered on the gen-machineconf / lopper generated
+ * cortexa53-linux.dts (Linux domain only, see device-tree.bbappend). The SDT (from the XSA) carries
+ * the PS and the PL cores of the block design: rsys_aon_0 (always-on block + clock guard in front of
+ * rocelet_sys, 1 MB at 0x8000_0000, irq pl_ps_irq0[0]), axi_iic_clk (Si5328), axi_iic_qsfp0 (QSFP28
+ * port 0) and axi_dma_0 (netdev channel); rocelet_sys_0, the guarded slave behind rsys_aon_0, is
+ * left out of the Linux tree by lopper (no CPU address). Register map: docs/source/zynqmp_hw.md.
+ */
+
+/* UART: the 2025.2 flow emits port-number = <0> on both PS UARTs; pin them (console = uart0). */
+&uart0 {
+	port-number = <0>;
+};
+
+&uart1 {
+	port-number = <1>;
+};
+
+/ {
+	aliases {
+		serial0 = &uart0;
+		serial1 = &uart1;
+	};
+	chosen {
+		stdout-path = "serial0:115200n8";
+	};
+};
+
+/* PS GEM3 (board RJ45): the SDT flow does not describe the board's TI DP83867 PHY, so Linux would
+ * use the Generic PHY driver and never program the RGMII delays (link up, no packets). Values from
+ * zynqmp-zcu106-revA.dts (PHY at MDIO address 0xc). Fixed MAC: the Opsero bench address of the
+ * ZCU106 (stable DHCP lease); change it for a board on your own network.
+ */
+&gem3 {
+	local-mac-address = [00 0a 35 06 21 07];
+	phy-handle = <&gem3_phy>;
+	mdio {
+		#address-cells = <1>;
+		#size-cells = <0>;
+		gem3_phy: ethernet-phy@c {
+			compatible = "ethernet-phy-id2000.a231";
+			reg = <0xc>;
+			ti,rx-internal-delay = <0x8>;
+			ti,tx-internal-delay = <0xa>;
+			ti,fifo-depth = <0x1>;
+			ti,dp83867-rxctrl-strap-quirk;
+		};
+	};
+};
+
+/* The rocelet register window (engine +0x0, system +0x1_0000, URAM +0x4_0000, always-on registers
+ * +0x8_0000) for roceletd: generic UIO (the EDF boot.scr passes uio_pdrv_genirq.of_id=generic-uio),
+ * named rocelet-regs (udev: /dev/rocelet-regs), with the always-on block's aggregated interrupt.
+ * Every access is answered OKAY by the clock guard, so a user-space mapping cannot raise an SError
+ * (0xDEADC10C while the MAC clock is stopped).
+ */
+&rsys_aon_0 {
+	compatible = "generic-uio";
+	linux,uio-name = "rocelet-regs";
+};
+
+/ {
+	/* The engine's PS DDR window (C_DDR_BASE / C_DDR_SIZE, decision: one 256 MB region): kept out
+	 * of the kernel's memory map, so the PL masters own it. roceletd maps it through the UIO device
+	 * below (uncached: no cache maintenance, aligned accesses only) and gives the engine its
+	 * physical address. PYNQ: pynq.MMIO(0x60000000, 0x10000000) on /dev/mem reaches the same bytes. */
+	reserved-memory {
+		#address-cells = <2>;
+		#size-cells = <2>;
+		ranges;
+		rocelet_ddr_mem: rocelet-ddr@60000000 {
+			reg = <0x0 0x60000000 0x0 0x10000000>;
+			no-map;
+		};
+	};
+
+	rocelet_ddr: rocelet-ddr@60000000 {
+		compatible = "generic-uio";
+		reg = <0x0 0x60000000 0x0 0x10000000>;
+		linux,uio-name = "rocelet-ddr";
+	};
+
+	/* rl0: the Linux network interface of QSFP28 port 0 (sw/linux/rl-net, rl_net.ko). Every frame
+	 * the engine does not terminate (not RoCE v2 UDP 4791) reaches Linux through the AXI DMA's S2MM
+	 * channel, Linux's frames leave through MM2S. reg = the always-on registers (link status for the
+	 * carrier, read only). MAC: the bench MAC of the ZCU106 + 1; change it with the GEM3 address. */
+	rocelet_net: rocelet-net@80080000 {
+		compatible = "opsero,rocelet-net-1.0";
+		reg = <0x0 0x80080000 0x0 0x100>;
+		dmas = <&axi_dma_0 0>, <&axi_dma_0 1>;
+		dma-names = "tx", "rx";
+		local-mac-address = [00 0a 35 06 21 08];
+	};
+};
+
+/* rl_net keeps many RX buffers queued on S2MM; xilinx_dma sets the interrupt-coalescing threshold to
+ * the number of queued descriptors, so the delay timer (1 = 125 SG clocks) must raise the IRQ after
+ * every burst. It is read with of_property_read_u8(): an 8-bit value. */
+&dma_channel_80120030 {
+	xlnx,irq-delay = /bits/ 8 <1>;
+};

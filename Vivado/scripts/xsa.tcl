@@ -80,8 +80,18 @@ write_bitstream -force $impl_dir/${block_name}_wrapper.bit
 write_mem_info -force $impl_dir/${block_name}_wrapper.mmi
 
 stamp "write_hw_platform"
-if {[catch {write_hw_platform -fixed -include_bit -force -file $origin_dir/$design_name/${block_name}_wrapper.xsa} err]} {
-  puts "WARNING: write_hw_platform -include_bit failed ($err); writing without the bitstream"
-  write_hw_platform -fixed -force -file $origin_dir/$design_name/${block_name}_wrapper.xsa
+# The bitstream must be inside the XSA for the Linux flows (sdtgen extracts it for BOOT.BIN).
+# In project mode write_hw_platform -include_bit looks for the bitstream of the impl_1 RUN, which
+# this in-process flow never launches ("Unable to get BIT file from implementation run"), so
+# export from the routed checkpoint instead (non-project: the in-memory design's bitstream).
+set xsa_file [file normalize $origin_dir/$design_name/${block_name}_wrapper.xsa]
+if {[catch {write_hw_platform -fixed -include_bit -force -file $xsa_file} err]} {
+  puts "INFO: project-mode write_hw_platform -include_bit unavailable; exporting from routed.dcp"
+  close_project
+  open_checkpoint $impl_dir/routed.dcp
+  if {[catch {write_hw_platform -fixed -include_bit -force -file $xsa_file} err2]} {
+    puts "WARNING: write_hw_platform -include_bit failed ($err2); writing without the bitstream"
+    write_hw_platform -fixed -force -file $xsa_file
+  }
 }
 stamp "done"

@@ -80,7 +80,7 @@ button.on { background: var(--btn-on); border-color: #4A78C0; }
     </div>
     <div>
       <div class="lbl">stream rate (the board follows from its next frame)</div>
-      <div class="row"><button id="b-rdn" title="Stream rate one step down (80, 64, 40, 20, 10, 5, 2, 1 Gb/s): the board sends frames more slowly from its next frame on; the picture does not change, the tiles do">rate -</button><button id="b-rup" title="Stream rate one step up (1, 2, 5, 10, 20, 40, 64, 80 Gb/s): the board sends frames faster from its next frame on; 80 is just under the test host's NIC-to-GPU ceiling">rate +</button></div>
+      <div class="row"><button id="b-rdn" title="Stream rate one step down (80, 64, 40, 20, 10, 5, 2, 1 Gb/s): the board sends frames more slowly from its next frame on; the picture does not change, the tiles do">rate -</button><button id="b-rup" title="Stream rate one step up (1, 2, 5, 10, 20, 40, 64, 80 Gb/s, up to the board's link: 40 on the ZCU106): the board sends frames faster from its next frame on; 80 is just under the test host's NIC-to-GPU ceiling">rate +</button></div>
     </div>
     <div id="msg"></div>
     <div class="panel" id="tiles"></div>
@@ -315,8 +315,8 @@ function connect() {
   var es = new EventSource("/events");
   es.addEventListener("hello", function (e) {
     hello = JSON.parse(e.data);
-    var src = { roce: "KCU116 -> 100G RoCE -> GPU", synthetic: "synthetic (bit-exact model)", csynthetic: "synthetic (CUDA model)" };
-    $("src").textContent = src[hello.source] || hello.source || "";
+    var src = { roce: "FPGA -> RoCE -> GPU", synthetic: "synthetic (bit-exact model)", csynthetic: "synthetic (CUDA model)" };
+    $("src").textContent = hello.source_label || src[hello.source] || hello.source || "";
   });
   es.addEventListener("frame", function (e) {
     st = JSON.parse(e.data); tFrame = Date.now();

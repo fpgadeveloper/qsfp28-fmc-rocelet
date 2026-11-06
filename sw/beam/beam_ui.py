@@ -227,6 +227,16 @@ NOISE_LEVELS = (100, 300, 1000, 3000)
 # documented for (the test host's NIC-to-GPU path is clean to 80 Gb/s); the keys walk RATE_STEPS.
 RATE_MIN_GBPS, RATE_MAX_GBPS = 1.0, 80.0
 RATE_STEPS = (1.0, 2.0, 5.0, 10.0, 20.0, 40.0, 64.0, 80.0)
+
+
+def set_rate_max(gbps):
+    """Lower the run-time rate range to the board's link (OPS_LINK_GBPS: 40 on the ZCU106 target): the
+    keys - / + and the page's rate stay within RATE_MIN_GBPS..gbps, the top step is gbps itself."""
+    global RATE_MAX_GBPS, RATE_STEPS
+    g = float(gbps)
+    if RATE_MIN_GBPS < g < RATE_MAX_GBPS:
+        RATE_MAX_GBPS = g
+        RATE_STEPS = tuple(x for x in RATE_STEPS if x < g) + (g,)
 ORBIT_R = (0.45, 0.6, 0.3, 0.7)       # contract 6.8
 ORBIT_P = (20.0, 27.0, 33.0, 41.0)
 ORBIT_PH = (0.0, 1.3, 2.6, 3.9)

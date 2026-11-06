@@ -51,7 +51,10 @@ sw/beam/run.sh python3 -m unittest -v tests/test_beam_gpu.py
 Every run ends with a `PASS:` / `FAIL:` line and writes a JSON summary (`--outdir`, `--tag`).
 
 `--source roce` follows `rocelet_hsb_app.py`. It finds the board by IP, runs `hl.reset()`, reads
-`S_BM_CAPS` (it refuses to run unless the value is 0x01440808; `--force` overrides), writes SOURCE = 2
+`S_BM_CAPS` (it refuses to run unless the value is 0x01440808; `--force` overrides), reads
+`LINK_GBPS` (the rate cap, and the window / page header: `ZCU106 -> 40G RoCE -> GPU`,
+`KCU116 -> 100G RoCE -> GPU`; `--board` names a ported board, `FPGA -> RoCE -> GPU` when the
+register cannot be read), writes SOURCE = 2
 and RATE_MBPS (`--rate` Gb/s), then the start scene (all 102 words, APPLY while the generator is
 idle). It arms the keepalive. `RoceReceiverOp` writes 1 MiB frames into GPU memory, and the start
 gate enables DP_VP_MASK once the graph is up. At the end the data plane is switched off.

@@ -10,10 +10,10 @@
 #include "xil_printf.h"
 #include "xparameters.h"
 #include "bspconfig.h"
-#include "xuartns550_l.h"
 #include "sleep.h"
 #include "hw.h"
 #include "util.h"
+#include "plat.h"
 
 void pr_u64(u64 v)
 {
@@ -150,9 +150,9 @@ int getline_uart(char *buf, int max)
 {
 	int n = 0;
 	for (;;) {
-		while (!XUartNs550_IsReceiveData(STDIN_BASEADDRESS))
+		while (!plat_rx_ready())
 			;
-		char c = (char)XUartNs550_RecvByte(STDIN_BASEADDRESS);
+		char c = plat_rx_byte();
 		if (c == '\r' || c == '\n') {
 			xil_printf("\r\n");
 			buf[n] = 0;
@@ -168,8 +168,8 @@ int getline_uart(char *buf, int max)
 int getline_poll(char *buf, int max)
 {
 	static int n;
-	while (XUartNs550_IsReceiveData(STDIN_BASEADDRESS)) {
-		char c = (char)XUartNs550_RecvByte(STDIN_BASEADDRESS);
+	while (plat_rx_ready()) {
+		char c = plat_rx_byte();
 		if (c == '\r' || c == '\n') {
 			xil_printf("\r\n");
 			buf[n] = 0;

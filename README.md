@@ -1,21 +1,27 @@
 # qsfp28-fmc-rocelet
 
 An open-source, lightweight **RoCE v2** (RDMA over Converged Ethernet) engine for AMD FPGAs,
-with a 100G reference design for the [Opsero Quad SFP28 / 2x QSFP28 FMC](https://docs.opsero.com)
-cards on AMD development boards. First target: KCU116 + 2x QSFP28 FMC (OP120).
+with reference designs for the [Opsero 2x QSFP28 FMC](https://docs.opsero.com) (OP120) on AMD
+development boards: **100G on the KCU116** (integrated 100G MAC) and **40G on the ZCU106**
+(open-source [omac](https://omac.ethernetfmc.com) Ethernet MACs, license-free, Linux on the
+Cortex-A53; 10G as a build option).
 
-> **Status: version 0.4.0** (2026-11-03), rocelet v0.2.2. The kcu116 target is validated on
-> hardware against an NVIDIA ConnectX-6 Dx (100G DAC, RS-FEC): RDMA at line rate in both
-> directions, loss recovery, link loss including a real cable pull, the built-in self-test, the
-> Holoscan Sensor Bridge device mode with NVIDIA's HSB 3.0.0 host software (RoCE into GPU memory
-> up to 80 Gb/s on the test host), and the beamforming demo (new in 0.4.0). See the
-> [revision history](https://qsfp28-rocelet.ethernetfmc.com/revision_history.html) in the docs
+> **Status: version 0.5.0** (2026-11-05), rocelet v0.3.0, opsero-ethernet-mac v0.1.0. Validated on
+> hardware against an NVIDIA ConnectX-6 Dx. **kcu116** (100G DAC, RS-FEC): RDMA at line rate in
+> both directions, loss recovery, link loss including a real cable pull, the built-in self-test,
+> the Holoscan Sensor Bridge device mode with NVIDIA's HSB 3.0.0 host software (RoCE into GPU
+> memory up to 80 Gb/s on the test host), and the beamforming demo. **zcu106** (new in 0.5.0,
+> 40G, FEC off): RDMA at 40G line rate into on-chip memory and into PS DDR, PAUSE both ways, the
+> self-test, the HSB device mode and the beamforming demo at up to 40 Gb/s, controlled from
+> Linux (daemon, command line, web UI, a network interface on the 40G port). See the
+> [revision history](https://qsfp28-rocelet.ethernetfmc.com/en/latest/revision_history.html) in the docs
 > for the measurements and the known limitations.
 
 Important links:
 
 * The user guide for this reference design is hosted here: [rocelet RoCE v2 reference design docs](https://qsfp28-rocelet.ethernetfmc.com "rocelet RoCE v2 reference design docs")
 * The engine's own documentation (architecture, interface, register map, integration, host rules): [rocelet docs](https://rocelet.ethernetfmc.com "rocelet docs")
+* The open-source Ethernet MACs of the ZCU106 target: [omac docs](https://omac.ethernetfmc.com "omac docs")
 * Datasheet of the [2x QSFP28 FMC]
 * The engine's source code: [rocelet on GitHub](https://github.com/fpgadeveloper/rocelet "rocelet on GitHub")
 * To report a bug: [Report an issue](https://github.com/fpgadeveloper/qsfp28-fmc-rocelet/issues "Report an issue").
@@ -40,8 +46,8 @@ rl> hsb on                                                                      
 RL_WIN=1 sw/beam/run.sh python3 rocelet_beam_app.py --source roce --preset 2 --rate 64 --ibv-name <rdma-dev>   # on the GPU host
 ```
 
-Details, presets and measurements: [Beamforming demo](https://qsfp28-rocelet.ethernetfmc.com/beam_demo.html);
-the GPU host from a bare PC to the demo: [Host setup](https://qsfp28-rocelet.ethernetfmc.com/host_setup.html).
+Details, presets and measurements: [Beamforming demo](https://qsfp28-rocelet.ethernetfmc.com/en/latest/beam_demo.html);
+the GPU host from a bare PC to the demo: [Host setup](https://qsfp28-rocelet.ethernetfmc.com/en/latest/host_setup.html).
 
 ## Why
 
@@ -58,11 +64,12 @@ link and need only a small part of the protocol. [rocelet](https://github.com/fp
 - IPv4/UDP framing, TX and RX ICRC, PMTU 256-4096, 802.3x pause honoured and generated,
   out-of-band QP setup (a host helper based on libibverbs exchanges QPN, PSN, rkey and buffer
   addresses; no in-band connection manager).
-- Written in SystemVerilog, 512-bit AXI-Stream at the CMAC user clock (100 GbE).
+- Written in SystemVerilog, a 512-bit engine at the MAC user clock: the 100G CMAC at
+  322 MHz, or a 40G / 10G MAC (256 / 64 bits) at 156.25 MHz through built-in width converters.
 
 ## Description
 
-The reference design puts the rocelet engine between the Kintex UltraScale+ integrated 100G
+The **kcu116** design puts the rocelet engine between the Kintex UltraScale+ integrated 100G
 Ethernet MAC (CMAC, with RS-FEC) on QSFP28 port 0 of the 2x QSFP28 FMC and an on-chip memory
 window (256 KB of UltraRAM), with a MicroBlaze that sets up the link and the queue pairs:
 
@@ -88,11 +95,26 @@ window (256 KB of UltraRAM), with a MicroBlaze that sets up the link and the que
   example script, a Holoscan application (C++ or Python checker, Holoviz spectrogram demo) and
   the Opsero `hololink_module`; details in the docs, "Holoscan Sensor Bridge device mode".
 
+The **zcu106** design keeps the same engine and system logic and builds them for the Zynq
+UltraScale+ (the starting point for RFSoC boards):
+
+* **MAC**: the open-source `omac_40g` (40GBASE-R4, MIT, git submodule
+  `submodules/opsero-ethernet-mac`) on the four GTH transceivers of QSFP28 port 0; `omac_10g`
+  (10GBASE-R) as a build option. No IP license of any kind.
+* **Linux on the Cortex-A53** (AMD EDF Yocto image): the daemon `roceletd` runs the console code
+  and owns the hardware, the command line `rl` (also over SSH: `rl t pma`), a web UI, and the
+  network interface `rl0` on the 40G port (Linux owns the port's IP; RoCE v2 stays in hardware).
+  A bare-metal A53 console with the same commands is the alternative.
+* **Memory**: the URAM window plus a **PS DDR window** (a 256 MB reserved region, mapped to user
+  space through UIO; two HP ports per direction carry 40G).
+* **Clock guard and always-on block**: CPU accesses never hang on the MAC clock domain; link,
+  lane and module status and the resets in one register block.
+
 ### Hardware
 
-* [KCU116] Kintex UltraScale+ evaluation board
-* Opsero [2x QSFP28 FMC] (OP120) on the KCU116 HPC connector (port 0)
-* A QSFP28 100G cable (DAC or AOC) to a RoCE v2 NIC (validated with an NVIDIA ConnectX-6 Dx), or a QSFP28 loopback plug for the self-test
+* [KCU116] Kintex UltraScale+ evaluation board, or [ZCU106] Zynq UltraScale+ evaluation board
+* Opsero [2x QSFP28 FMC] (OP120) on the KCU116 HPC connector or the ZCU106 HPC0 connector (port 0)
+* A QSFP28 cable (DAC or AOC; 40G-capable for the ZCU106) to a RoCE v2 NIC (validated with an NVIDIA ConnectX-6 Dx; for 40G the NIC must support 40GBASE-CR4), or a QSFP28 loopback plug for the self-test
 * For the beamforming demo: a Linux host with that NIC, an NVIDIA GPU and a monitor (see [Host setup](docs/source/host_setup.md))
 
 ## Requirements
@@ -103,10 +125,12 @@ This project is designed for version 2025.2 of the AMD tools (Vivado and Vitis).
 * Vitis 2025.2
 * [2x QSFP28 FMC]
 * One of the target platforms listed below
-* The no-cost license of the [UltraScale+ Integrated 100G Ethernet (CMAC)] IP (add it to your
-  account on the [AMD licensing site](https://www.xilinx.com/getlicense))
+* kcu116 only: the no-cost license of the [UltraScale+ Integrated 100G Ethernet (CMAC)] IP (add
+  it to your account on the [AMD licensing site](https://www.xilinx.com/getlicense)); the zcu106
+  needs no license
+* zcu106 Linux image: a Linux build host (AMD EDF Yocto 2025.2, about 60 GB of disk)
 
-Clone with the submodule:
+Clone with the submodules:
 
 ```
 git clone --recursive https://github.com/fpgadeveloper/qsfp28-fmc-rocelet.git
@@ -117,11 +141,18 @@ git clone --recursive https://github.com/fpgadeveloper/qsfp28-fmc-rocelet.git
 <!-- updater start -->
 ### FPGA designs
 
-| Target board          | Target design      | Ports       | FEC         | FMC Slot(s) | Standalone<br> console | Built-in<br> self-test | Vivado<br> Edition |
+| Target board          | Target design      | Ports       | FEC         | FMC Slot(s) | Standalone<br> console | Linux<br> (Yocto) | Vivado<br> Edition |
 |-----------------------|--------------------|-------------|-------------|-------------|-------|-------|-------|
-| [KCU116]              | `kcu116`           | 1x 100G     | RS-FEC (CL91) | HPC         | :white_check_mark: | :white_check_mark: | Standard :free: |
+| [KCU116]              | `kcu116`           | 1x 100G     | RS-FEC (CL91) | HPC         | :white_check_mark: | :x:   | Standard :free: |
+
+### Zynq UltraScale+ designs
+
+| Target board          | Target design      | Ports       | FEC         | FMC Slot(s) | Standalone<br> console | Linux<br> (Yocto) | Vivado<br> Edition |
+|-----------------------|--------------------|-------------|-------------|-------------|-------|-------|-------|
+| [ZCU106]              | `zcu106`           | 1x 40G (10G option) | None        | HPC0        | :white_check_mark: | :white_check_mark: | Standard :free: |
 
 [KCU116]: https://www.xilinx.com/kcu116
+[ZCU106]: https://www.xilinx.com/zcu106
 <!-- updater end -->
 
 ## Build
@@ -129,11 +160,15 @@ git clone --recursive https://github.com/fpgadeveloper/qsfp28-fmc-rocelet.git
 ```
 ./build.sh all --target kcu116          # Linux / git bash
 build.bat all --target kcu116           # Windows command prompt
+./build.sh all --target zcu106          # Linux build host (the Yocto image needs Linux)
 ```
 
-`all` builds the Vivado project and the bitstream (`xsa`), the MicroBlaze application
-(`standalone`), the configuration-flash image (`cfgmem`) and gathers the boot files in
-`bootimages/`. Single stages: `xsa`, `standalone`, `cfgmem`; state of the build: `status`.
+`all` builds the Vivado project and the bitstream (`xsa`), the console application
+(`standalone`: MicroBlaze on the kcu116, Cortex-A53 `BOOT.BIN` on the zcu106), the
+configuration-flash image (`cfgmem`, kcu116: `rocelet_boot.mcs` next to `rocelet_boot.bit` in
+`Vitis/boot/kcu116/`) or the Linux image (`yocto`, zcu106), and zips the boot files of each flow
+into `bootimages/` (`package`). State of the build: `status`. The zcu106's 10G option:
+`python3 config/update.py --mac zcu106=omac_10g`, then build as usual.
 
 System simulation of the design's RTL with the engine (xsim, QSFP28 loopback model):
 
@@ -143,9 +178,11 @@ Vivado/src/hdl/tb/run_xsim.sh all
 
 ## Run
 
-**1. Board.** Program `rocelet_boot.bit` (in `bootimages/`, or `Vitis/boot/kcu116/` after a
-build) over JTAG, open the console (115200 8N1) and run the self-test, which needs no host (a
-QSFP28 loopback plug, or the cable to the host):
+**1. Board.** KCU116: program `rocelet_boot.bit` (`Vitis/boot/kcu116/` after a build, also in
+the standalone zip in `bootimages/`) over JTAG and open the console (115200 8N1). ZCU106: write the Yocto image to an
+SD card, copy `BOOT.BIN` to its first partition, boot from SD and log in (UART or SSH); see
+[Getting started](docs/source/getting_started.md). Run the self-test, which needs no host (a
+QSFP28 loopback plug, or the cable to the host; on the ZCU106 Linux image: `rl t pma`):
 
 ```
 rl> t pma
@@ -153,14 +190,18 @@ rl> t pma
 SELFTEST PASS 19/19 loop=pma fec=1 selftest_logic=1
 ```
 
+(`fec=0` on the ZCU106: its 40G and 10G links have no FEC.)
+
 **2. Host.** Prepare the GPU host once, following [Host setup](docs/source/host_setup.md): the
 NVIDIA driver, Docker with the NVIDIA Container Toolkit and the Holoscan Sensor Bridge 3.0.0
-container, the 100G port (forced 100G, auto-negotiation off, RS-FEC, MTU 4200, 192.168.20.1/24,
-point to point to the board), and a display session for the window. Copy or clone this
+container, the port that faces the board (KCU116: forced 100G, auto-negotiation off, RS-FEC;
+ZCU106: forced 40G, auto-negotiation off, FEC off; MTU 4200, 192.168.20.1/24, point to point),
+and a display session for the window. Copy or clone this
 repository onto the host; `sw/beam/run.sh` runs the demo software in the container.
 
 **3. Demo.** On the console switch the Holoscan Sensor Bridge device mode on (after every
-power-up), then start the application on the host:
+power-up; ZCU106 Linux image: `rl hsb on`), then start the application on the host (on the
+ZCU106 it runs at up to 40 Gb/s):
 
 ```
 rl> hsb on
@@ -175,21 +216,23 @@ frames, a waterfall) in [Holoscan Sensor Bridge device mode](docs/source/hsb.md)
 **4. RDMA tests.** For RDMA transfers driven from the console with the engine's host tool
 (`make -C submodules/rocelet/host`), follow [Testing with a host](docs/source/hardware_test.md).
 
-Measured against an NVIDIA ConnectX-6 Dx (3 m DAC, RS-FEC, MTU 4200; one QP, 64 KB
-messages, PMTU 4096):
+Measured against an NVIDIA ConnectX-6 Dx (3 m DAC, MTU 4200; one QP, 64 KB messages, PMTU
+4096; KCU116 at 100G with RS-FEC, ZCU106 at 40G without FEC):
 
-| Direction | Result |
-|-----------|-------:|
-| FPGA to host, RDMA WRITE with immediate | 98.01 Gb/s |
-| Host to FPGA, RDMA WRITE | 96.79 Gb/s |
-| Host READ of FPGA memory | 96.59 Gb/s |
-| FPGA WRITE-with-immediate to completion, unloaded (64 B / 4 KB) | 1.17 us / 2.03 us |
-| Host READ request to first response (FPGA responder, 4 KB) | 425 ns |
-| Real cable pull with a 40 Gb/s stream in flight (14.9 s outage) | resumed 1.9 s after the NIC's link returned, 0 lost |
+| Direction | KCU116 (100G) | ZCU106 (40G) |
+|-----------|--------------:|-------------:|
+| FPGA to host, RDMA WRITE with immediate | 98.01 Gb/s | 38.83 Gb/s |
+| Host to FPGA, RDMA WRITE | 96.79 Gb/s | 38.74 Gb/s (URAM), 38.75 Gb/s (PS DDR) |
+| Host READ of FPGA memory | 96.59 Gb/s | 38.73 Gb/s (URAM), 38.74 Gb/s (PS DDR) |
+| FPGA WRITE-with-immediate to completion, unloaded (64 B / 4 KB) | 1.17 us / 2.03 us | |
+| Host READ request to first response (FPGA responder, 4 KB) | 425 ns | |
+| Real cable pull with a 40 Gb/s stream in flight (14.9 s outage) | resumed 1.9 s after the NIC's link returned, 0 lost | |
 
-The two latency rows come from the first ConnectX-6 Dx session (rocelet v0.1; the completion
-times are averages), the others from the release validation (rocelet v0.2.2). See
-[Testing with a host](docs/source/hardware_test.md) for all results.
+The two KCU116 latency rows come from the first ConnectX-6 Dx session (rocelet v0.1; the
+completion times are averages), the other KCU116 rows from the 0.3.0 release validation (rocelet
+v0.2.2), the ZCU106 column from the 0.5.0 validation (rocelet v0.3.0). See
+[Testing with a host](docs/source/hardware_test.md) and
+[Resources](docs/source/resources.md) for all results.
 
 ## Contribute
 
@@ -211,7 +254,8 @@ updates on the awesome projects we work on.
 ## License
 
 The sources of this repository are released under the MIT license, see
-[LICENSE](LICENSE). The rocelet engine (`submodules/rocelet`) is MIT as well.
+[LICENSE](LICENSE). The rocelet engine (`submodules/rocelet`) and the omac Ethernet MACs
+(`submodules/opsero-ethernet-mac`) are MIT as well.
 
 [2x QSFP28 FMC]: https://docs.opsero.com/op120/datasheet/overview/
 [UltraScale+ Integrated 100G Ethernet (CMAC)]: https://www.amd.com/en/products/adaptive-socs-and-fpgas/intellectual-property/cmac_usplus.html

@@ -11,8 +11,11 @@
  *    command | 0x80, flags, sequence, status, 0, the {address, value} pairs, the latched
  *    sequence (BE16) and two zero bytes;
  *  - optional BOOTP reply on UDP 12268 (hololink-set-ip): op 2, chaddr = our MAC -> new IP.
- * Frames arrive through the control-plane receive FIFO (rsys_crx: UDP 8192 / 12268 of the
- * engine's other-traffic port) and leave through the raw TX buffer (rsys_raw).
+ * Transport: standalone, frames arrive through the control-plane receive FIFO (rsys_crx: UDP
+ * 8192 / 12268 of the engine's other-traffic port) and leave through the raw TX buffer (rsys_raw),
+ * with the Ethernet / IPv4 / UDP headers built here. Linux (PLAT_LINUX, roceletd): the port's IP
+ * belongs to Linux (rl0), so the same protocol runs over plain UDP sockets bound to rl0
+ * (sw/linux/roceletd/hsb_net.c); everything above the datagram is this file, unchanged.
  *
  * Copyright (c) 2026 Opsero Electronic Design Inc.
  * SPDX-License-Identifier: MIT
@@ -27,6 +30,7 @@
 #include "selftest.h"
 #include "hsb.h"
 #include "hsb_regs.h"
+#include "plat.h"
 
 #define HSB_IP_VERSION   0x2603u           /* claimed HSB IP version = compat-id */
 #define HSB_COMPAT_ID    0x2603u
@@ -37,15 +41,10 @@
 static const u8 UUID[16] = { 0x98, 0x18, 0x3d, 0x0f, 0x18, 0xee, 0x47, 0x19,
                              0xa3, 0xb4, 0xca, 0x69, 0xe9, 0xb9, 0x4c, 0x97 };
 
-/* 100 MHz free-running count of axi_timer_0 counter 0 (not used by the BSP: sleep is a loop) */
-#if defined(XPAR_AXI_TIMER_0_BASEADDR)
-#define TMR_BASE XPAR_AXI_TIMER_0_BASEADDR
-#else
-#define TMR_BASE 0x41C00000u
-#endif
-#define TICKS_S  100000000u
-#define TICKS_MS 100000u
-static u32 now_ticks(void) { return Xil_In32(TMR_BASE + 0x8u); }
+/* 100 MHz free-running time base of the platform layer (plat.c: MicroBlaze axi_timer_0, A53 XTime) */
+#define TICKS_S  PLAT_TICKS_S
+#define TICKS_MS (PLAT_TICKS_S / 1000u)
+static u32 now_ticks(void) { return plat_ticks(); }
 
 /* ---------------- state ---------------- */
 static int g_on;
@@ -132,6 +131,7 @@ static void make_serial(void)
 
 static void pr_serial(void) { for (int i = 0; i < 7; i++) xil_printf("%02x", g_serial[i]); }
 
+#if !defined(PLAT_LINUX)
 /* Ethernet + IPv4 + UDP headers (checksum 0) in f, payload length n; returns the frame length */
 static int udp_hdr(u8 *f, const u8 *dmac, u32 dip, u32 sport, u32 dport, int n)
 {
@@ -149,9 +149,25 @@ static int udp_hdr(u8 *f, const u8 *dmac, u32 dip, u32 sport, u32 dport, int n)
 	while (len < 60) f[len++] = 0;
 	return len;
 }
+#endif
 
 static u8 *txb(void) { return cbuf + 4096; }       /* reply frame (cbuf: 8200 B, shared with capd) */
 static u8 *rxb(void) { return cbuf; }              /* received frame */
+
+/* send the UDP payload f[42 .. 42+n) to dip:dport from our sport (dmac: the next hop's MAC) */
+#if defined(PLAT_LINUX)
+#include "hsb_net.h"
+static void hsb_tx(u8 *f, const u8 *dmac, u32 dip, u32 sport, u32 dport, int n)
+{
+	(void)dmac;                                    /* the kernel resolves the next hop */
+	hsb_net_send(dip, sport, dport, f + 42, n);
+}
+#else
+static void hsb_tx(u8 *f, const u8 *dmac, u32 dip, u32 sport, u32 dport, int n)
+{
+	raw_send(f, udp_hdr(f, dmac, dip, sport, dport, n));
+}
+#endif
 
 /* ---------------- enumeration ---------------- */
 static void bootp_send(void)
@@ -172,7 +188,7 @@ static void bootp_send(void)
 	v[37] = (u8)HSB_IP_VERSION; v[38] = (u8)(HSB_IP_VERSION >> 8);
 	pb16(v + 55, g_bootp_seq++);
 	v[57] = g_serial_hw ? 2 : 0;                    /* [0] PTP time valid = 0 [1] hardware serial */
-	raw_send(f, udp_hdr(f, bcast, 0xFFFFFFFFu, 12268, 12267, 300));
+	hsb_tx(f, bcast, 0xFFFFFFFFu, 12268, 12267, 300);
 	g_bootp_n++;
 }
 
@@ -357,6 +373,7 @@ static int reg_rd(u32 a, u32 *v)
 	case OPS_KEEPALIVE:       *v = g_ka_ms; break;
 	case OPS_WATCHDOG_COUNT:  *v = g_wd_n; break;
 	case OPS_LINKPAUSE_COUNT: *v = g_lp_n; break;
+	case OPS_LINK_GBPS:       *v = LINK_GBPS; break;
 	default:          *v = 0; break;    /* PTP SYNC_STAT / OFM, CTRL_EVT_STAT: 0 (no PTP, no events) */
 	}
 	return ST_OK;
@@ -419,23 +436,18 @@ static int ecb(const u8 *q, int n, u8 *r)
 	return (fl & 1) ? o : 0;
 }
 
-/* one control-plane frame f[0..n) (IPv4 / UDP 8192 or 12268, as the RTL filter passed it) */
-static void rx_frame(const u8 *f, int n)
+/* one control-plane datagram: payload p[0..plen) from smac / sip:sport to dip:dport */
+static void rx_udp(const u8 *smac, u32 sip, u32 sport, u32 dip, u32 dport, const u8 *p, int plen)
 {
-	if (n < 42) return;
-	u32 dip = be32(f + 30), sip = be32(f + 26), sport = ((u32)f[34] << 8) | f[35], dport = ((u32)f[36] << 8) | f[37];
-	int plen = (int)(((u32)f[38] << 8) | f[39]) - 8;
-	if (plen < 0 || 42 + plen > n) plen = n - 42;
-	const u8 *p = f + 42;
 	if (dport == 8192 && dip == MY_IP) {
 		u8 *t = txb();
 		g_req++;
-		g_last_ip = sip; g_last_port = sport; memcpy(g_last_mac, f + 6, 6);
+		g_last_ip = sip; g_last_port = sport; memcpy(g_last_mac, smac, 6);
 		int rl = ecb(p, plen, t + 42);
 		if (rl) {
-			u8 smac[6];
-			memcpy(smac, f + 6, 6);
-			raw_send(t, udp_hdr(t, smac, sip, 8192, sport, rl));
+			u8 m[6];
+			memcpy(m, smac, 6);
+			hsb_tx(t, m, sip, 8192, sport, rl);
 			g_rep++;
 		}
 		if (g_reset_pending) { g_reset_pending = 0; g_start_pending = 0; hsb_reset(); g_resets++; }
@@ -446,12 +458,27 @@ static void rx_frame(const u8 *f, int n)
 		if (ip && ip != MY_IP) {
 			MY_IP = ip;
 			eng_wr(ROCELET_IP4, MY_IP);
+#if defined(PLAT_LINUX)
+			hsb_net_set_ip(MY_IP);                  /* rl0 follows (the engine answers RoCE for it) */
+#endif
 			g_setip++;
 			xil_printf("hsb: set-ip -> "); pr_ip(MY_IP); xil_printf("\r\n");
 		}
 		g_t_bootp = now_ticks() - TICKS_S;              /* announce the new address now */
 	}
 }
+
+#if !defined(PLAT_LINUX)
+/* one control-plane frame f[0..n) (IPv4 / UDP 8192 or 12268, as the RTL filter passed it) */
+static void rx_frame(const u8 *f, int n)
+{
+	if (n < 42) return;
+	u32 dip = be32(f + 30), sip = be32(f + 26), sport = ((u32)f[34] << 8) | f[35], dport = ((u32)f[36] << 8) | f[37];
+	int plen = (int)(((u32)f[38] << 8) | f[39]) - 8;
+	if (plen < 0 || 42 + plen > n) plen = n - 42;
+	rx_udp(f + 6, sip, sport, dip, dport, f + 42, plen);
+}
+#endif
 
 /* ---------------- producer watchdog ---------------- */
 /* Link pause: stop the producer at a frame boundary, keep the host's configuration. The RTL
@@ -503,6 +530,15 @@ int hsb_on(void) { return g_on; }
 void hsb_poll(void)
 {
 	if (!g_on) return;
+#if defined(PLAT_LINUX)
+	for (int k = 0; k < 4; k++) {
+		u32 sip, sport, dport;
+		u8 smac[6], *p = rxb() + 42;
+		int n = hsb_net_recv(&sip, &sport, &dport, smac, p, 4096 - 42);
+		if (n < 0) { dp_watch(); break; }
+		rx_udp(smac, sip, sport, MY_IP, dport, p, n);
+	}
+#else
 	for (int k = 0; ; k++) {
 		u32 st = sv(RSYS_S_CRX_STATUS);
 		if (!(st & 0xFF)) { dp_watch(); break; }
@@ -517,6 +553,7 @@ void hsb_poll(void)
 		cfg_set(RSYS_C_CRX_POP, 1);
 		rx_frame(f, n);
 	}
+#endif
 	if (now_ticks() - g_t_bootp >= TICKS_S) {
 		g_t_bootp = now_ticks();
 		bootp_send();
@@ -540,11 +577,12 @@ void hsb_tests_begin(void)
 	xil_printf("(hsb: data plane stopped for the test; the host has to configure it again)\r\n");
 }
 
-static void hsb_start(void)
+static int hsb_start(void)
 {
-	Xil_Out32(TMR_BASE + 0x4u, 0);                  /* TLR0 */
-	Xil_Out32(TMR_BASE + 0x0u, 0x20u);              /* TCSR0: LOAD0 */
-	Xil_Out32(TMR_BASE + 0x0u, 0x90u);              /* TCSR0: ENT0 | ARHT0, count up */
+	/* the time base is started by plat_init() */
+#if defined(PLAT_LINUX)
+	if (hsb_net_open() != 0) return -1;
+#endif
 	make_serial();
 	regs_clear();
 	g_latched = 0;
@@ -552,13 +590,16 @@ static void hsb_start(void)
 	g_start_pending = 0;
 	g_ka_to = g_ka_ms = g_wd_n = g_lp_n = 0;
 	g_lp = 0;
+#if !defined(PLAT_LINUX)
 	cfg_set(RSYS_C_CRX_CTRL, 0);                    /* flush: re-enable below */
 	while (sv(RSYS_S_CRX_STATUS) & 0xFF) cfg_set(RSYS_C_CRX_POP, 1);
 	eng_ctrl_set(ROCELET_CTRL_OTHER_RX_EN_MASK, 0);
 	cfg_set(RSYS_C_CRX_CTRL, 1);
+#endif
 	g_t_on = g_t_ms = now_ticks();
 	g_t_bootp = g_t_on - TICKS_S;                   /* first BOOTP now */
 	g_on = 1;
+	return 0;
 }
 
 static void hsb_status(void)
@@ -571,9 +612,13 @@ static void hsb_status(void)
 		   " %u sequence errors, latched sequence 0x%04x | set-ip %u\r\n", g_bootp_n, g_req, g_rep, g_err, g_last_st,
 		   g_seqerr, g_latched, g_setip);
 	if (g_req) { xil_printf("last host "); pr_ip(g_last_ip); xil_printf(":%u mac ", g_last_port); pr_mac(g_last_mac); xil_printf("\r\n"); }
+#if defined(PLAT_LINUX)
+	hsb_net_status();
+#else
 	u32 cs = sv(RSYS_S_CRX_STATUS);
 	xil_printf("receive FIFO: %u queued | frames %u, dropped full %u, dropped long %u, not matching %u\r\n", cs & 0xFF,
 		   cnt(RSYS_E_CRX_FRAMES), cnt(RSYS_E_CRX_DROP), cnt(RSYS_E_CRX_LONG), cnt(RSYS_E_CRX_FILT));
+#endif
 	xil_printf("registers: reset 0x%x 0x%x (%u HSB resets) | PTP", r_rst[0], r_rst[1], g_resets);
 	for (int i = 1; i < 8; i++) xil_printf(" %x", r_ptp[i]);
 	xil_printf(" | events");
@@ -624,13 +669,17 @@ void hsb_cmd(char **argv, int argc)
 	const char *a = argc > 1 ? argv[1] : "st";
 	if (!strcmp(a, "on")) {
 		if (!ENG.hsb) { xil_printf("this engine was built without HSB_EN\r\n"); return; }
-		hsb_start();
+		if (hsb_start() != 0) { xil_printf("error: HSB not started (control-plane sockets)\r\n"); return; }
 		xil_printf("ok HSB on: BOOTP every second from ");
 		pr_ip(MY_IP); xil_printf(", register protocol on UDP 8192, serial "); pr_serial(); xil_printf("\r\n");
 	} else if (!strcmp(a, "off")) {
 		if (g_dp_on) dp_stop();
+#if defined(PLAT_LINUX)
+		hsb_net_close();
+#else
 		cfg_set(RSYS_C_CRX_CTRL, 0);
 		eng_ctrl_set(0, ROCELET_CTRL_OTHER_RX_EN_MASK);
+#endif
 		g_on = 0;
 		xil_printf("ok HSB off\r\n");
 	} else if (!strcmp(a, "serial")) {

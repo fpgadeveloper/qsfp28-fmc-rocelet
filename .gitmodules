@@ -2,3 +2,7 @@
 	path = submodules/rocelet
 	url = https://github.com/fpgadeveloper/rocelet
 	branch = main
+[submodule "submodules/opsero-ethernet-mac"]
+	path = submodules/opsero-ethernet-mac
+	url = https://github.com/fpgadeveloper/opsero-ethernet-mac
+	branch = main

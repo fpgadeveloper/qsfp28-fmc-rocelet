@@ -1,18 +1,30 @@
 // SPDX-License-Identifier: MIT
 //
-// rocelet_sys - the rocelet RoCE v2 engine in the KCU116 + OP120 reference design:
-// everything between the CMAC's 512-bit AXI-Streams and the MicroBlaze's
-// AXI-Lite port, in the CMAC user clock (322.265625 MHz).
+// rocelet_sys - the rocelet RoCE v2 engine in the qsfp28-fmc-rocelet reference design:
+// everything between the MAC's AXI-Streams and the CPU's AXI-Lite port, in the MAC user
+// clock (KCU116: 100G CMAC, 512 bits at 322.265625 MHz; ZCU106: omac_10g, 64 bits at
+// 156.25 MHz). The MAC connects through a generic boundary (mac_ctl / mac_pz / mac_addr
+// out, mac_stat / mac_ev / mac_pause in: docs/source/zynqmp_hw.md "MAC boundary"); a small
+// per-MAC adapter in the block design maps it onto the MAC's own ports (Vivado/src/hdl/mac).
+// Below 512 bits (MAC_WIDTH 64 / 128 / 256) rocelet's own width converters
+// (rocelet_rx_upsize / rocelet_tx_downsize) sit at this module's MAC ports, so the engine
+// and every self-test tap, injector and frame classifier here keep working on 64-byte beats.
 //
-//   CMAC RX -> [u_rinj] -> u_rl (rocelet_top: MAC glue, ARP/ICMP, engine) -> [u_inj, skid] -> CMAC TX
-//   u_rl memory master (AXI4, 512 bit) -> u_mem: on-chip memory window (URAM),
-//       also mapped into the MicroBlaze address space
+//   MAC RX -> [upsize] -> [u_rinj] -> u_rl (rocelet_top: MAC glue, ARP/ICMP, engine) -> [u_inj, skid] -> [downsize] -> MAC TX
+//   u_rl memory master (AXI4, 512 bit) -> [u_dec, DDR_EN] -> u_mem: on-chip memory window
+//       (URAM), also mapped into the CPU's address space; with DDR_EN, local addresses with
+//       bit 39 set are an offset into a PS DDR region (C_DDR_BASE_* / C_DDR_SIZE) reached
+//       on m_axi_ddrw_* / m_axi_ddrr_* (rsys_axi_dec; outside the region: null target);
+//       DDR_PORTS = 2: address-interleaved over two masters per direction (rsys_axi_ilv,
+//       512-byte granules: port = physical address bit 9; m_axi_ddrw1_* / m_axi_ddrr1_*)
 //   work requests: u_wrq (firmware WR queue, payload read from u_mem, completion
 //       queues) and, with SELFTEST, u_wg (line-rate WR generator, pattern payload)
 //   u_raw: firmware frames to the engine's other-traffic port, and a capture
-//       buffer at the CMAC interfaces (or on the other-traffic output)
-//   CMAC: static control (ctl_*) from system registers, link status and a few
-//       fabric counters (the CMAC IP's AXI-Lite statistics block is not built)
+//       buffer at the MAC interfaces (or on the other-traffic output)
+//   u_odma (ODMA_EN): the netdev DMA channel, other-traffic frames to / from the PS through
+//       an AXI DMA (dma_clk); its TX shares the other-traffic input with u_raw (frame-atomic)
+//   MAC: static control (mac_ctl / mac_pz / mac_addr) from system registers, link status
+//       and a few fabric counters
 //   u_split: AXI-Lite decoder: engine registers (+0x00000), system registers
 //       u_regs (+0x10000), memory window (+0x40000)
 //   Holoscan Sensor Bridge (HSB) device side (docs/source/hsb.md):
@@ -55,14 +67,28 @@ module rocelet_sys
     parameter bit          SELFTEST     = 1'b1,
     parameter bit          RSFEC        = 1'b1,    // RS-FEC on after reset
     parameter int          MEM_BYTES    = 262144,
-    parameter int          PAT_BIT      = 40
+    parameter int          PAT_BIT      = 40,
+    // MAC and clock
+    parameter int          MAC_WIDTH    = 512,     // MAC AXI-Stream width: 64, 128, 256, 512
+    parameter int          CLK_MHZ      = 322,     // engine clock (rounded): TICK_DIV reset value
+    parameter int          CLK_KHZ      = 322266,  // engine clock in kHz (rocelet CLK_KHZ register)
+    parameter int          LINK_GBPS    = 100,     // link speed (PAUSE quantum, CAPS)
+    parameter longint      CLK_HZ       = 322265625, // exact clock for the producer time base
+    // ZynqMP options
+    parameter bit          DDR_EN       = 1'b0,    // PS DDR memory window (m_axi_ddrw / m_axi_ddrr)
+    parameter int          DDR_BIT      = 39,      // local address bit that selects PS DDR
+    parameter int          DDR_PORTS    = 1,       // PS DDR masters per direction: 1, or 2 (interleaved)
+    parameter int          ILV_BIT      = 9,       // DDR_PORTS 2: interleave granule 2^ILV_BIT bytes
+    parameter bit          ODMA_EN      = 1'b0     // netdev DMA channel (m_axis_orx / s_axis_otx)
 ) (
     input  wire logic          clk,
     input  wire logic          gen_clk,        // 200 MHz: IQ16 / beam generators, device DNA (asynchronous to clk)
     input  wire logic          sys_rst,        // system reset (any clock; synchronised here)
-    input  wire logic          mac_tx_rst,     // CMAC usr_tx_reset
-    input  wire logic          mac_rx_rst,     // CMAC usr_rx_reset
     output wire logic          irq,            // engine: a QP error is latched
+    output logic      [7:0]    evt,            // event levels for an interrupt controller (always-on block):
+                                               // [0] engine irq [1] control-plane RX FIFO not empty
+                                               // [2] work completion queued [3] receive completion queued
+                                               // [4] DMA channel RX pending [5] raw TX busy
 
     input  wire logic [18:0]   s_axil_awaddr,
     input  wire logic          s_axil_awvalid,
@@ -82,60 +108,120 @@ module rocelet_sys
     output wire logic          s_axil_rvalid,
     input  wire logic          s_axil_rready,
 
-    input  wire logic [511:0]  rx_tdata,
-    input  wire logic [63:0]   rx_tkeep,
+    // MAC AXI-Streams (MAC_WIDTH bits, clk); RX has no tready
+    input  wire logic [MAC_WIDTH-1:0]   rx_tdata,
+    input  wire logic [MAC_WIDTH/8-1:0] rx_tkeep,
     input  wire logic          rx_tvalid,
     input  wire logic          rx_tlast,
     input  wire logic          rx_tuser,
 
-    output wire logic [511:0]  tx_tdata,
-    output wire logic [63:0]   tx_tkeep,
+    output wire logic [MAC_WIDTH-1:0]   tx_tdata,
+    output wire logic [MAC_WIDTH/8-1:0] tx_tkeep,
     output wire logic          tx_tvalid,
     input  wire logic          tx_tready,
     output wire logic          tx_tlast,
     output wire logic          tx_tuser,
 
-    // CMAC 802.3x flow control
-    input  wire logic [8:0]    pause_rx_req,       // stat_rx_pause_req
-    input  wire logic [8:0]    pause_rx_valid,     // stat_rx_pause_valid
-    input  wire logic [15:0]   pause_rx_quanta8,   // stat_rx_pause_quanta8
-    input  wire logic          pause_rx_frame,     // stat_rx_pause
-    input  wire logic          pause_tx_frame,     // stat_tx_pause
-    output wire logic [8:0]    pause_tx_req,       // ctl_tx_pause_req
+    // generic MAC boundary (clk). mac_ctl: [0] rx enable [1] tx enable [2] send RFI [3] send LFI
+    // [4] send idle [5] FEC [6] receive PAUSE [7] send PAUSE [10:8] GT loopback (0 off,
+    // 1 near-end PCS, 2 near-end PMA) [16] PAUSE request of the engine (level, unregistered);
+    // mac_pz: [15:0] PAUSE quanta sent [31:16] refresh; mac_addr: the station MAC (byte 0 on the
+    // wire = [7:0]). mac_stat: [0] RX aligned / block lock [1] RX status [2] local fault
+    // [3] remote fault [4] received local fault [5] internal local fault [6] hi BER [7] misaligned
+    // [8] FEC hi SER [9] FEC lanes aligned [10] RX in reset [11] TX in reset [12] link up
+    // [13] TX PAUSE active. mac_ev (increments per clock): [2:0] RX frames [5:3] RX bad FCS
+    // [8:6] RX bad code [9] TX frames [10] TX bad FCS [11] TX underflow [12] FEC corrected
+    // [13] FEC uncorrectable [14] PAUSE frame received [15] PAUSE frame sent.
+    // mac_pause: [17] received PAUSE in force (level) [16] received PAUSE valid [15:0] its quanta
+    output logic      [31:0]   mac_ctl,
+    output logic      [31:0]   mac_pz,
+    output logic      [47:0]   mac_addr,
+    input  wire logic [15:0]   mac_stat,
+    input  wire logic [15:0]   mac_ev,
+    input  wire logic [17:0]   mac_pause,
 
-    // CMAC static control (C_MAC_CTL / C_MAC_PZ)
-    output logic               ctl_rx_enable,
-    output logic               ctl_tx_enable,
-    output logic               ctl_tx_send_rfi,
-    output logic               ctl_tx_send_lfi,
-    output logic               ctl_tx_send_idle,
-    output logic               ctl_rsfec,          // RS-FEC TX + RX (correction + indication)
-    output logic               ctl_rx_pause,       // accept global / priority PAUSE frames (checks on)
-    output logic      [8:0]    ctl_rx_pause_vec,   // ctl_rx_pause_enable / ctl_rx_pause_ack: [8] global
-    output logic      [8:0]    ctl_tx_pause_vec,   // ctl_tx_pause_enable: [8] global
-    output logic      [15:0]   ctl_tx_pause_quanta,
-    output logic      [15:0]   ctl_tx_pause_refresh,
-    output logic      [11:0]   ctl_gt_loopback,    // gt_loopback_in: 3 bits per lane
+    // PS DDR window (DDR_EN): write-only and read-only AXI4 masters, 512 bits, clk
+    output wire logic [1:0]    m_axi_ddrw_awid,
+    output wire logic [39:0]   m_axi_ddrw_awaddr,
+    output wire logic [7:0]    m_axi_ddrw_awlen,
+    output wire logic [2:0]    m_axi_ddrw_awsize,
+    output wire logic [1:0]    m_axi_ddrw_awburst,
+    output wire logic [3:0]    m_axi_ddrw_awcache,
+    output wire logic [2:0]    m_axi_ddrw_awprot,
+    output wire logic          m_axi_ddrw_awvalid,
+    input  wire logic          m_axi_ddrw_awready,
+    output wire logic [511:0]  m_axi_ddrw_wdata,
+    output wire logic [63:0]   m_axi_ddrw_wstrb,
+    output wire logic          m_axi_ddrw_wlast,
+    output wire logic          m_axi_ddrw_wvalid,
+    input  wire logic          m_axi_ddrw_wready,
+    input  wire logic [1:0]    m_axi_ddrw_bid,
+    input  wire logic [1:0]    m_axi_ddrw_bresp,
+    input  wire logic          m_axi_ddrw_bvalid,
+    output wire logic          m_axi_ddrw_bready,
+    output wire logic [1:0]    m_axi_ddrr_arid,
+    output wire logic [39:0]   m_axi_ddrr_araddr,
+    output wire logic [7:0]    m_axi_ddrr_arlen,
+    output wire logic [2:0]    m_axi_ddrr_arsize,
+    output wire logic [1:0]    m_axi_ddrr_arburst,
+    output wire logic [3:0]    m_axi_ddrr_arcache,
+    output wire logic [2:0]    m_axi_ddrr_arprot,
+    output wire logic          m_axi_ddrr_arvalid,
+    input  wire logic          m_axi_ddrr_arready,
+    input  wire logic [1:0]    m_axi_ddrr_rid,
+    input  wire logic [511:0]  m_axi_ddrr_rdata,
+    input  wire logic [1:0]    m_axi_ddrr_rresp,
+    input  wire logic          m_axi_ddrr_rlast,
+    input  wire logic          m_axi_ddrr_rvalid,
+    output wire logic          m_axi_ddrr_rready,
 
-    // CMAC status and statistics (CMAC user clock)
-    input  wire logic          stat_rx_aligned,
-    input  wire logic          stat_rx_status,
-    input  wire logic          stat_rx_local_fault,
-    input  wire logic          stat_rx_remote_fault,
-    input  wire logic          stat_rx_received_local_fault,
-    input  wire logic          stat_rx_internal_local_fault,
-    input  wire logic          stat_rx_hi_ber,
-    input  wire logic          stat_rx_misaligned,
-    input  wire logic          stat_rx_rsfec_hi_ser,
-    input  wire logic          stat_rx_rsfec_lane_alignment_status,
-    input  wire logic [2:0]    stat_rx_total_packets,
-    input  wire logic [2:0]    stat_rx_bad_fcs,
-    input  wire logic [2:0]    stat_rx_bad_code,
-    input  wire logic          stat_rx_rsfec_corrected_cw_inc,
-    input  wire logic          stat_rx_rsfec_uncorrected_cw_inc,
-    input  wire logic          stat_tx_total_packets,
-    input  wire logic          stat_tx_bad_fcs,
-    input  wire logic          tx_unfout
+    // PS DDR window, second port per direction (DDR_EN and DDR_PORTS = 2; else idle)
+    output wire logic [1:0]    m_axi_ddrw1_awid,
+    output wire logic [39:0]   m_axi_ddrw1_awaddr,
+    output wire logic [7:0]    m_axi_ddrw1_awlen,
+    output wire logic [2:0]    m_axi_ddrw1_awsize,
+    output wire logic [1:0]    m_axi_ddrw1_awburst,
+    output wire logic [3:0]    m_axi_ddrw1_awcache,
+    output wire logic [2:0]    m_axi_ddrw1_awprot,
+    output wire logic          m_axi_ddrw1_awvalid,
+    input  wire logic          m_axi_ddrw1_awready,
+    output wire logic [511:0]  m_axi_ddrw1_wdata,
+    output wire logic [63:0]   m_axi_ddrw1_wstrb,
+    output wire logic          m_axi_ddrw1_wlast,
+    output wire logic          m_axi_ddrw1_wvalid,
+    input  wire logic          m_axi_ddrw1_wready,
+    input  wire logic [1:0]    m_axi_ddrw1_bid,
+    input  wire logic [1:0]    m_axi_ddrw1_bresp,
+    input  wire logic          m_axi_ddrw1_bvalid,
+    output wire logic          m_axi_ddrw1_bready,
+    output wire logic [1:0]    m_axi_ddrr1_arid,
+    output wire logic [39:0]   m_axi_ddrr1_araddr,
+    output wire logic [7:0]    m_axi_ddrr1_arlen,
+    output wire logic [2:0]    m_axi_ddrr1_arsize,
+    output wire logic [1:0]    m_axi_ddrr1_arburst,
+    output wire logic [3:0]    m_axi_ddrr1_arcache,
+    output wire logic [2:0]    m_axi_ddrr1_arprot,
+    output wire logic          m_axi_ddrr1_arvalid,
+    input  wire logic          m_axi_ddrr1_arready,
+    input  wire logic [1:0]    m_axi_ddrr1_rid,
+    input  wire logic [511:0]  m_axi_ddrr1_rdata,
+    input  wire logic [1:0]    m_axi_ddrr1_rresp,
+    input  wire logic          m_axi_ddrr1_rlast,
+    input  wire logic          m_axi_ddrr1_rvalid,
+    output wire logic          m_axi_ddrr1_rready,
+
+    // netdev DMA channel (ODMA_EN), dma_clk: other-traffic frames to / from the PS
+    input  wire logic          dma_clk,
+    output wire logic [511:0]  m_axis_orx_tdata,
+    output wire logic [63:0]   m_axis_orx_tkeep,
+    output wire logic          m_axis_orx_tvalid,
+    input  wire logic          m_axis_orx_tready,
+    output wire logic          m_axis_orx_tlast,
+    input  wire logic [511:0]  s_axis_otx_tdata,
+    input  wire logic [63:0]   s_axis_otx_tkeep,
+    input  wire logic          s_axis_otx_tvalid,
+    output wire logic          s_axis_otx_tready,
+    input  wire logic          s_axis_otx_tlast
 );
 
 localparam bit PAY_EN = (RTX_MODE != 1);
@@ -221,45 +307,62 @@ rsys_regs #(.RSFEC(RSFEC)) u_regs (
 logic [31:0] now = '0;
 always_ff @(posedge clk) now <= now + 32'd1;
 
-// ---------------- CMAC static control, status, fabric counters ----------------
+// ---------------- MAC static control, status, fabric counters ----------------
+wire logic pz_tx_req;                     // the engine's PAUSE request (level)
 always_ff @(posedge clk) begin
-    ctl_rx_enable        <= cfg[C_MAC_CTL][0];
-    ctl_tx_enable        <= cfg[C_MAC_CTL][1];
-    ctl_tx_send_rfi      <= cfg[C_MAC_CTL][2];
-    ctl_tx_send_lfi      <= cfg[C_MAC_CTL][3];
-    ctl_tx_send_idle     <= cfg[C_MAC_CTL][4];
-    ctl_rsfec            <= cfg[C_MAC_CTL][5];
-    ctl_rx_pause         <= cfg[C_MAC_CTL][6];
-    ctl_rx_pause_vec     <= {cfg[C_MAC_CTL][6], 8'd0};
-    ctl_tx_pause_vec     <= {cfg[C_MAC_CTL][7], 8'd0};
-    ctl_tx_pause_quanta  <= cfg[C_MAC_PZ][15:0];
-    ctl_tx_pause_refresh <= cfg[C_MAC_PZ][31:16];
-    ctl_gt_loopback      <= {4{cfg[C_MAC_CTL][10:8]}};
+    mac_ctl[15:0]  <= {5'd0, cfg[C_MAC_CTL][10:0]};
+    mac_pz         <= cfg[C_MAC_PZ];
+    mac_addr       <= {cfg[C_MAC_ADDR_HI][15:0], cfg[C_MAC_ADDR_LO]};
 end
+always_comb mac_ctl[31:16] = {15'd0, pz_tx_req};
 
-logic [11:0] mac_st, mac_st_d;
+wire logic mac_rx_rst = mac_stat[10];
+wire logic mac_tx_rst = mac_stat[11];
+logic [13:0] mac_st, mac_st_d;
 logic        ev_tx_unf_mac, ev_tx_bad_fcs, ev_align_lost;
 logic [2:0]  m_rx_pkts, m_rx_bad_fcs, m_rx_bad_code;
 logic        m_tx_pkts;
 logic        link_ok = 1'b0;
-always_ff @(posedge clk) link_ok <= stat_rx_aligned & ~stat_rx_local_fault & ~stat_rx_remote_fault;
+// link state for the requester (rocelet link_up): the adapter's mac_stat[12], e.g. CMAC
+// aligned & ~local fault & ~remote fault, omac stat_link_up
+always_ff @(posedge clk) link_ok <= mac_stat[12];
 
 always_ff @(posedge clk) begin
-    mac_st <= {mac_tx_rst, mac_rx_rst, stat_rx_rsfec_lane_alignment_status, stat_rx_rsfec_hi_ser,
-               stat_rx_misaligned, stat_rx_hi_ber, stat_rx_internal_local_fault,
-               stat_rx_received_local_fault, stat_rx_remote_fault, stat_rx_local_fault,
-               stat_rx_status, stat_rx_aligned};
+    mac_st        <= mac_stat[13:0];
     mac_st_d      <= mac_st;
-    ev_tx_unf_mac <= tx_unfout;
-    ev_tx_bad_fcs <= stat_tx_bad_fcs;
+    ev_tx_unf_mac <= mac_ev[11];
+    ev_tx_bad_fcs <= mac_ev[10];
     ev_align_lost <= mac_st_d[0] && !mac_st[0];
-    m_rx_pkts     <= stat_rx_total_packets;
-    m_rx_bad_fcs  <= stat_rx_bad_fcs;
-    m_rx_bad_code <= stat_rx_bad_code;
-    m_tx_pkts     <= stat_tx_total_packets;
+    m_rx_pkts     <= mac_ev[2:0];
+    m_rx_bad_fcs  <= mac_ev[5:3];
+    m_rx_bad_code <= mac_ev[8:6];
+    m_tx_pkts     <= mac_ev[9];
 end
 
-// ---------------- RX: CMAC -> [RX fault injector] -> engine ----------------
+// ---------------- MAC width conversion (rocelet's converters; none at 512 bits) ----------------
+wire logic [511:0] w_rx_tdata, w_tx_tdata;
+wire logic [63:0]  w_rx_tkeep, w_tx_tkeep;
+wire logic         w_rx_tvalid, w_rx_tlast, w_rx_tuser, w_tx_tvalid, w_tx_tready, w_tx_tlast;
+if (MAC_WIDTH == 512) begin : g_w512
+    assign w_rx_tdata = rx_tdata; assign w_rx_tkeep = rx_tkeep; assign w_rx_tvalid = rx_tvalid;
+    assign w_rx_tlast = rx_tlast; assign w_rx_tuser = rx_tuser;
+    assign tx_tdata = w_tx_tdata; assign tx_tkeep = w_tx_tkeep; assign tx_tvalid = w_tx_tvalid;
+    assign tx_tlast = w_tx_tlast; assign w_tx_tready = tx_tready;
+end else begin : g_wconv
+    rocelet_rx_upsize #(.MAC_W(MAC_WIDTH)) u_rx_up (
+        .clk(clk), .rst(eng_rst), .abort(mac_rx_rst),
+        .s_tdata(rx_tdata), .s_tkeep(rx_tkeep), .s_tvalid(rx_tvalid), .s_tlast(rx_tlast), .s_tuser(rx_tuser),
+        .m_tdata(w_rx_tdata), .m_tkeep(w_rx_tkeep), .m_tvalid(w_rx_tvalid), .m_tlast(w_rx_tlast), .m_tuser(w_rx_tuser)
+    );
+    rocelet_tx_downsize #(.MAC_W(MAC_WIDTH)) u_tx_dn (
+        .clk(clk), .rst(eng_rst),
+        .s_tdata(w_tx_tdata), .s_tkeep(w_tx_tkeep), .s_tvalid(w_tx_tvalid), .s_tready(w_tx_tready), .s_tlast(w_tx_tlast),
+        .m_tdata(tx_tdata), .m_tkeep(tx_tkeep), .m_tvalid(tx_tvalid), .m_tready(tx_tready), .m_tlast(tx_tlast),
+        .ev_gap()
+    );
+end
+
+// ---------------- RX: MAC -> [RX fault injector] -> engine ----------------
 wire logic [511:0] ri_tdata;
 wire logic [63:0]  ri_tkeep;
 wire logic         ri_tvalid, ri_tlast, ri_tuser;
@@ -271,15 +374,15 @@ if (SELFTEST) begin : g_rinj
         .cfg_skip(cfg[C_RINJ_SKIP]), .cfg_count(cfg[C_RINJ_COUNT]), .cfg_period(cfg[C_RINJ_PERIOD]),
         .cfg_thresh(cfg[C_RINJ_THRESH]), .cfg_byte(cfg[C_RINJ_BYTE][8:0]),
         .arm(cfg_wr[C_RINJ_CTRL] && cfg[C_RINJ_CTRL][8]),
-        .s_axis_tdata(rx_tdata), .s_axis_tkeep(rx_tkeep), .s_axis_tvalid(rx_tvalid), .s_axis_tready(),
-        .s_axis_tlast(rx_tlast), .s_axis_tuser(rx_tuser),
+        .s_axis_tdata(w_rx_tdata), .s_axis_tkeep(w_rx_tkeep), .s_axis_tvalid(w_rx_tvalid), .s_axis_tready(),
+        .s_axis_tlast(w_rx_tlast), .s_axis_tuser(w_rx_tuser),
         .m_axis_tdata(ri_tdata), .m_axis_tkeep(ri_tkeep), .m_axis_tvalid(ri_tvalid), .m_axis_tready(1'b1),
         .m_axis_tlast(ri_tlast), .m_axis_tuser(ri_tuser),
         .ev_seen(ev_rinj_seen), .ev_done(ev_rinj_done), .armed(rinj_armed), .lfsr_o()
     );
 end else begin : g_norinj
-    assign ri_tdata = rx_tdata; assign ri_tkeep = rx_tkeep; assign ri_tvalid = rx_tvalid;
-    assign ri_tlast = rx_tlast; assign ri_tuser = rx_tuser;
+    assign ri_tdata = w_rx_tdata; assign ri_tkeep = w_rx_tkeep; assign ri_tvalid = w_rx_tvalid;
+    assign ri_tlast = w_rx_tlast; assign ri_tuser = w_rx_tuser;
     assign ev_rinj_seen = 1'b0; assign ev_rinj_done = 1'b0; assign rinj_armed = 1'b0;
 end
 
@@ -320,25 +423,27 @@ rocelet_top #(
     .RING_BYTES(RING_BYTES), .RING_RAM("ultra"), .MAX_WR(MAX_WR), .RX_ICRC_EN(RX_ICRC_EN),
     .ICRC_SHARE(ICRC_SHARE), .IPV6_EN(1'b0), .HSB_EN(HSB_EN), .VLAN_EN(1'b1), .PAUSE_EN(1'b1),
     .ARP_EN(1'b1), .OTHER_EN(1'b1), .COUNTERS_EN(1'b1), .M_AXI_ADDR_W(64), .M_AXI_ID_W(ID_W),
-    .CLK_MHZ(322)
+    .MEM_RD_BUF(DDR_EN ? 512 : 256),
+    // the engine is always 512 bits wide here (the converters sit at this module's MAC ports, so
+    // the self-test taps see 64-byte beats): its CAPS register reports MAC_WIDTH 512; the MAC's
+    // own width is in S_SYS_CFG and in the always-on block's CAPS (ZynqMP)
+    .CLK_MHZ(CLK_MHZ), .CLK_KHZ(CLK_KHZ), .LINK_GBPS(LINK_GBPS), .MAC_WIDTH(512)
 ) u_rl (
     .clk(clk), .rst(eng_rst), .irq(irq),
-    .mac_rx_reset(mac_rx_rst), .mac_tx_reset(mac_tx_rst), .mac_rx_aligned(stat_rx_aligned),
-    // link state for the requester's ACK-timeout hold (rocelet v0.2): CMAC aligned and neither a
-    // local fault (no valid signal received) nor a remote fault (the partner does not receive
-    // ours) - the peer cannot answer in either case. Registered in clk: the CMAC's rx_clk is
-    // gt_txusrclk2 (= clk) in this design; rocelet synchronises it with two flip-flops anyway.
+    .mac_rx_reset(mac_rx_rst), .mac_tx_reset(mac_tx_rst), .mac_rx_status(mac_stat[0]),
+    // link state for the requester's ACK-timeout hold (rocelet v0.2): MAC aligned / block-locked
+    // and neither a local fault (no valid signal received) nor a remote fault (the partner does
+    // not receive ours) - the peer cannot answer in either case (the MAC adapter's mac_stat[12]).
+    // Registered in clk; rocelet synchronises it with two flip-flops anyway.
     // Fault toggles while the link comes up only restart LINK_GRACE.
     .link_up(link_ok),
     .s_axis_rx_tdata(ri_tdata), .s_axis_rx_tkeep(ri_tkeep), .s_axis_rx_tvalid(ri_tvalid),
     .s_axis_rx_tlast(ri_tlast), .s_axis_rx_tuser(ri_tuser),
     .m_axis_tx_tdata(e_tdata), .m_axis_tx_tkeep(e_tkeep), .m_axis_tx_tvalid(e_tvalid),
     .m_axis_tx_tready(e_tready), .m_axis_tx_tlast(e_tlast), .m_axis_tx_tuser(),
-    .stat_rx_pause_req(pause_rx_req), .stat_rx_pause_valid(pause_rx_valid),
-    .stat_rx_pause_quanta8(pause_rx_quanta8), .stat_rx_pause(pause_rx_frame),
-    .stat_tx_pause(pause_tx_frame), .ctl_tx_pause_req(pause_tx_req),
-    .stat_rx_rsfec_corrected_cw_inc(stat_rx_rsfec_corrected_cw_inc),
-    .stat_rx_rsfec_uncorrected_cw_inc(stat_rx_rsfec_uncorrected_cw_inc),
+    .mac_pause_hold(mac_pause[17]), .mac_pause_valid(mac_pause[16]), .mac_pause_quanta(mac_pause[15:0]),
+    .mac_pause_req(pz_tx_req), .mac_pause_rx_frame(mac_ev[14]), .mac_pause_tx_frame(mac_ev[15]),
+    .mac_fec_corr_inc(mac_ev[12]), .mac_fec_uncorr_inc(mac_ev[13]),
     .m_axis_other_tdata(oth_rx_tdata), .m_axis_other_tkeep(oth_rx_tkeep), .m_axis_other_tvalid(oth_rx_tvalid),
     .m_axis_other_tready(1'b1), .m_axis_other_tlast(oth_rx_tlast),
     .s_axis_other_tdata(oth_tx_tdata), .s_axis_other_tkeep(oth_tx_tkeep), .s_axis_other_tvalid(oth_tx_tvalid),
@@ -371,7 +476,7 @@ rocelet_top #(
     .s_axil_rvalid(ma_rvalid[0]), .s_axil_rready(ma_rready[0])
 );
 
-// ---------------- TX: engine -> [TX fault injector] -> CMAC ----------------
+// ---------------- TX: engine -> [TX fault injector] -> MAC ----------------
 logic        ev_inj_seen, ev_inj_done, inj_armed;
 logic [31:0] inj_lfsr;
 if (SELFTEST) begin : g_inj
@@ -395,12 +500,12 @@ if (SELFTEST) begin : g_inj
         .clk(clk), .rst(st_rst),
         .s_axis_tdata(k_tdata), .s_axis_tkeep(k_tkeep), .s_axis_tvalid(k_tvalid), .s_axis_tready(k_tready),
         .s_axis_tlast(k_tlast),
-        .m_axis_tdata(tx_tdata), .m_axis_tkeep(tx_tkeep), .m_axis_tvalid(tx_tvalid), .m_axis_tready(tx_tready),
-        .m_axis_tlast(tx_tlast)
+        .m_axis_tdata(w_tx_tdata), .m_axis_tkeep(w_tx_tkeep), .m_axis_tvalid(w_tx_tvalid), .m_axis_tready(w_tx_tready),
+        .m_axis_tlast(w_tx_tlast)
     );
 end else begin : g_noinj
-    assign tx_tdata = e_tdata; assign tx_tkeep = e_tkeep; assign tx_tvalid = e_tvalid;
-    assign e_tready = tx_tready; assign tx_tlast = e_tlast;
+    assign w_tx_tdata = e_tdata; assign w_tx_tkeep = e_tkeep; assign w_tx_tvalid = e_tvalid;
+    assign e_tready = w_tx_tready; assign w_tx_tlast = e_tlast;
     assign ev_inj_seen = 1'b0; assign ev_inj_done = 1'b0; assign inj_armed = 1'b0; assign inj_lfsr = '0;
 end
 assign tx_tuser = 1'b0;
@@ -409,29 +514,32 @@ assign tx_tuser = 1'b0;
 logic        rx_first = 1'b1, tx_first = 1'b1, oth_first = 1'b1;
 logic [15:0] tx_idle = '0;
 always_ff @(posedge clk) begin
-    if (rx_tvalid) rx_first <= rx_tlast;
+    if (w_rx_tvalid) rx_first <= w_rx_tlast;
     if (oth_rx_tvalid) oth_first <= oth_rx_tlast;
-    if (tx_tvalid && tx_tready) tx_first <= tx_tlast;
-    if (tx_tvalid && tx_tready) tx_idle <= '0;
+    if (w_tx_tvalid && w_tx_tready) tx_first <= w_tx_tlast;
+    if (w_tx_tvalid && w_tx_tready) tx_idle <= '0;
     else if (tx_idle != 16'hFFFF) tx_idle <= tx_idle + 16'd1;
 end
 wire logic cap_oth = cfg[C_CAP_CTRL][4];
 logic ev_raw_sent, ev_cap;
+wire logic [511:0] raw_tx_tdata;
+wire logic [63:0]  raw_tx_tkeep;
+wire logic         raw_tx_tvalid, raw_tx_tready, raw_tx_tlast;
 wire logic [31:0] cap_status;
 wire logic raw_busy;
 rsys_raw u_raw (
     .clk(clk), .rst(st_rst),
     .wr_en(raw_we), .wr_addr(raw_waddr), .wr_data(raw_wdata),
     .send(cfg_wr[C_RAW_SEND]), .send_len(cfg[C_RAW_LEN][11:0]),
-    .m_axis_tdata(oth_tx_tdata), .m_axis_tkeep(oth_tx_tkeep), .m_axis_tvalid(oth_tx_tvalid),
-    .m_axis_tready(oth_tx_tready), .m_axis_tlast(oth_tx_tlast), .ev_sent(ev_raw_sent), .busy(raw_busy),
+    .m_axis_tdata(raw_tx_tdata), .m_axis_tkeep(raw_tx_tkeep), .m_axis_tvalid(raw_tx_tvalid),
+    .m_axis_tready(raw_tx_tready), .m_axis_tlast(raw_tx_tlast), .ev_sent(ev_raw_sent), .busy(raw_busy),
     .cap_arm(cfg_wr[C_CAP_CTRL] && cfg[C_CAP_CTRL][0]), .cap_mode(cfg[C_CAP_CTRL][2:1]),
-    .cap_tx(cfg[C_CAP_CTRL][3]), .ttap_valid(tx_tvalid && tx_tready), .ttap_first(tx_first),
-    .ttap_data(tx_tdata), .ttap_keep(tx_tkeep), .ttap_last(tx_tlast), .ttap_idle(tx_idle),
+    .cap_tx(cfg[C_CAP_CTRL][3]), .ttap_valid(w_tx_tvalid && w_tx_tready), .ttap_first(tx_first),
+    .ttap_data(w_tx_tdata), .ttap_keep(w_tx_tkeep), .ttap_last(w_tx_tlast), .ttap_idle(tx_idle),
     .cap_match(cfg[C_CAP_MATCH]),
-    .tap_valid(cap_oth ? oth_rx_tvalid : rx_tvalid), .tap_first(cap_oth ? oth_first : rx_first),
-    .tap_data(cap_oth ? oth_rx_tdata : rx_tdata), .tap_keep(cap_oth ? oth_rx_tkeep : rx_tkeep),
-    .tap_last(cap_oth ? oth_rx_tlast : rx_tlast),
+    .tap_valid(cap_oth ? oth_rx_tvalid : w_rx_tvalid), .tap_first(cap_oth ? oth_first : rx_first),
+    .tap_data(cap_oth ? oth_rx_tdata : w_rx_tdata), .tap_keep(cap_oth ? oth_rx_tkeep : w_rx_tkeep),
+    .tap_last(cap_oth ? oth_rx_tlast : w_rx_tlast),
     .cap_raddr(cap_raddr), .cap_rdata(cap_rdata), .cap_status(cap_status), .ev_cap(ev_cap)
 );
 
@@ -449,10 +557,58 @@ rsys_crx #(.SLOTS(16)) u_crx (
     .ev_frame(ev_crx_frame), .ev_drop(ev_crx_drop), .ev_long(ev_crx_long), .ev_filt(ev_crx_filt)
 );
 
+// ---------------- netdev DMA channel (ODMA_EN) and the other-traffic TX arbiter ----------------
+// Frames to the engine's other-traffic input come from the firmware's raw TX buffer (u_raw) or
+// from the PS (u_odma); the arbiter switches only between frames (both sources hold whole
+// frames, so a granted frame streams without gaps).
+wire logic [511:0] od_tx_tdata;
+wire logic [63:0]  od_tx_tkeep;
+wire logic         od_tx_tvalid, od_tx_tready, od_tx_tlast;
+logic              ev_od_rx, ev_od_drop, ev_od_tx;
+wire logic         od_pending;
+if (ODMA_EN) begin : g_odma
+    rsys_odma u_odma (
+        .clk(clk), .rst(st_rst), .rx_en(cfg[C_ODMA_CTRL][0]),
+        .s_valid(oth_rx_tvalid), .s_first(oth_first), .s_data(oth_rx_tdata), .s_keep(oth_rx_tkeep),
+        .s_last(oth_rx_tlast),
+        .dma_clk(dma_clk),
+        .m_axis_tdata(m_axis_orx_tdata), .m_axis_tkeep(m_axis_orx_tkeep), .m_axis_tvalid(m_axis_orx_tvalid),
+        .m_axis_tready(m_axis_orx_tready), .m_axis_tlast(m_axis_orx_tlast),
+        .s_axis_tdata(s_axis_otx_tdata), .s_axis_tkeep(s_axis_otx_tkeep), .s_axis_tvalid(s_axis_otx_tvalid),
+        .s_axis_tready(s_axis_otx_tready), .s_axis_tlast(s_axis_otx_tlast),
+        .m_tx_tdata(od_tx_tdata), .m_tx_tkeep(od_tx_tkeep), .m_tx_tvalid(od_tx_tvalid),
+        .m_tx_tready(od_tx_tready), .m_tx_tlast(od_tx_tlast),
+        .ev_rx_frame(ev_od_rx), .ev_rx_drop(ev_od_drop), .ev_tx_frame(ev_od_tx), .rx_pending(od_pending)
+    );
+end else begin : g_noodma
+    assign m_axis_orx_tdata = '0; assign m_axis_orx_tkeep = '0; assign m_axis_orx_tvalid = 1'b0;
+    assign m_axis_orx_tlast = 1'b0; assign s_axis_otx_tready = 1'b0;
+    assign od_tx_tdata = '0; assign od_tx_tkeep = '0; assign od_tx_tvalid = 1'b0; assign od_tx_tlast = 1'b0;
+    assign od_pending = 1'b0;
+    always_ff @(posedge clk) begin ev_od_rx <= 1'b0; ev_od_drop <= 1'b0; ev_od_tx <= 1'b0; end
+end
+
+logic ta_busy = 1'b0, ta_sel = 1'b0;     // a frame is granted; 0 raw buffer, 1 DMA channel
+wire  logic ta_pick = raw_tx_tvalid ? 1'b0 : 1'b1;
+wire  logic ta_cur  = ta_busy ? ta_sel : ta_pick;
+assign oth_tx_tdata  = ta_cur ? od_tx_tdata  : raw_tx_tdata;
+assign oth_tx_tkeep  = ta_cur ? od_tx_tkeep  : raw_tx_tkeep;
+assign oth_tx_tvalid = ta_cur ? od_tx_tvalid : raw_tx_tvalid;
+assign oth_tx_tlast  = ta_cur ? od_tx_tlast  : raw_tx_tlast;
+assign raw_tx_tready = oth_tx_tready && !ta_cur;
+assign od_tx_tready  = oth_tx_tready &&  ta_cur;
+always_ff @(posedge clk) begin
+    if (oth_tx_tvalid && oth_tx_tready) begin
+        ta_busy <= !oth_tx_tlast;
+        ta_sel  <= ta_cur;
+    end
+    if (st_rst) ta_busy <= 1'b0;
+end
+
 // ---------------- HSB producer: time, device DNA, IQ16 source, frame producer ----------------
 wire logic [47:0] t_s;
 wire logic [29:0] t_ns;
-rsys_ptime u_ptime (.clk(clk), .rst(regs_rst), .t_s(t_s), .t_ns(t_ns));
+rsys_ptime #(.CLK_HZ(CLK_HZ)) u_ptime (.clk(clk), .rst(regs_rst), .t_s(t_s), .t_ns(t_ns));
 
 wire logic [95:0] dna;
 wire logic        dna_valid;
@@ -492,6 +648,20 @@ rsys_beam_src u_bms (
     .st_applied_frame(bm_aframe), .st_applies(bm_applies), .seek_bl('0), .seek_km('0)
 );
 
+// the producer's sample-source boundary (s_axis_src) and the source mux
+wire logic          src_tvalid, src_tready, src_enable, src_start;
+wire logic [511:0]  src_tdata;
+wire logic [63:0]   src_tuser;
+wire logic [1:0]    src_sel;
+rsys_src_mux u_smux (
+    .src_sel(src_sel), .src_enable(src_enable), .src_start(src_start),
+    .m_axis_src_tvalid(src_tvalid), .m_axis_src_tdata(src_tdata), .m_axis_src_tuser(src_tuser),
+    .m_axis_src_tready(src_tready),
+    .iq_valid(iq_valid), .iq_data(iq_data), .iq_pop(iq_pop), .iq_enable(iq_enable), .iq_start(iq_start),
+    .bm_valid(bm_valid), .bm_data(bm_data), .bm_sid(bm_sid), .bm_sframe(bm_sframe), .bm_pop(bm_pop),
+    .bm_enable(bm_enable), .bm_start(bm_start)
+);
+
 wire logic          h_wr_valid, h_wr_ready;
 wire logic [255:0]  h_wr_desc;
 wire logic [511:0]  h_pay_tdata;
@@ -508,9 +678,8 @@ rsys_hsb_prod u_hp (
     .cfg_pg_first(cfg[C_HP_PAGES][27:16]), .cfg_pg_last(cfg[C_HP_PAGES][11:0]), .cfg_frame(cfg[C_HP_FRAME]),
     .cfg_wrmax(cfg[C_HP_WRMAX]), .cfg_period(cfg[C_HP_PERIOD]), .cfg_count(cfg[C_HP_COUNT]),
     .t_s(t_s), .t_ns(t_ns),
-    .s_iq_valid(iq_valid), .s_iq_data(iq_data), .s_iq_pop(iq_pop), .iq_enable(iq_enable), .iq_start(iq_start),
-    .s_bm_valid(bm_valid), .s_bm_data(bm_data), .s_bm_sid(bm_sid), .s_bm_sframe(bm_sframe), .s_bm_pop(bm_pop),
-    .bm_enable(bm_enable), .bm_start(bm_start),
+    .s_axis_src_tvalid(src_tvalid), .s_axis_src_tdata(src_tdata), .s_axis_src_tuser(src_tuser),
+    .s_axis_src_tready(src_tready), .src_sel(src_sel), .src_enable(src_enable), .src_start(src_start),
     .m_wr_valid(h_wr_valid), .m_wr_ready(h_wr_ready), .m_wr_desc(h_wr_desc),
     .m_pay_tdata(h_pay_tdata), .m_pay_tvalid(h_pay_tvalid), .m_pay_tready(h_pay_tready), .m_pay_tlast(h_pay_tlast),
     .pay_busy(h_pay_busy), .running(h_running), .frames(h_frames), .page(h_page), .fnum(h_fnum),
@@ -597,7 +766,147 @@ assign g_pay_tready = wpay_tready && g_pay_busy;
 assign h_pay_tready = wpay_tready && !g_pay_busy && h_pay_busy;
 assign q_pay_tready = wpay_tready && !g_pay_busy && !h_pay_busy;
 
-// ---------------- memory window ----------------
+// ---------------- memory window (+ PS DDR window, DDR_EN) ----------------
+wire logic [ID_W-1:0] mu_awid, mu_bid, mu_arid, mu_rid;
+wire logic [63:0]   mu_awaddr, mu_araddr;
+wire logic [7:0]    mu_awlen, mu_arlen;
+wire logic          mu_awvalid, mu_awready, mu_wlast, mu_wvalid, mu_wready, mu_bvalid, mu_bready;
+wire logic          mu_arvalid, mu_arready, mu_rlast, mu_rvalid, mu_rready;
+wire logic [511:0]  mu_wdata, mu_rdata;
+wire logic [63:0]   mu_wstrb;
+wire logic [1:0]    mu_bresp, mu_rresp;
+logic               ev_ddr_wr, ev_ddr_rd, ev_ddr_oor;
+if (DDR_EN) begin : g_ddr
+    // the decoder's PS DDR masters (one per direction)
+    wire logic [ID_W-1:0] dw_awid, dw_bid, dr_arid, dr_rid;
+    wire logic [39:0]     dw_awaddr, dr_araddr;
+    wire logic [7:0]      dw_awlen, dr_arlen;
+    wire logic            dw_awvalid, dw_awready, dw_wlast, dw_wvalid, dw_wready, dw_bvalid, dw_bready;
+    wire logic            dr_arvalid, dr_arready, dr_rlast, dr_rvalid, dr_rready;
+    wire logic [511:0]    dw_wdata, dr_rdata;
+    wire logic [63:0]     dw_wstrb;
+    wire logic [1:0]      dw_bresp, dr_rresp;
+    rsys_axi_dec #(.ID_W(ID_W), .ADDR_W(64), .DDR_BIT(DDR_BIT), .PAT_BIT(PAT_BIT), .DDR_AW(40)) u_dec (
+        .clk(clk), .rst(regs_rst),
+        .win_base({cfg[C_DDR_BASE_HI][7:0], cfg[C_DDR_BASE_LO][31:12], 12'd0}),
+        .win_size({8'd0, cfg[C_DDR_SIZE][31:12], 12'd0}),
+        .s_awid(axi_awid), .s_awaddr(axi_awaddr), .s_awlen(axi_awlen), .s_awvalid(axi_awvalid), .s_awready(axi_awready),
+        .s_wdata(axi_wdata), .s_wstrb(axi_wstrb), .s_wlast(axi_wlast), .s_wvalid(axi_wvalid), .s_wready(axi_wready),
+        .s_bid(axi_bid), .s_bresp(axi_bresp), .s_bvalid(axi_bvalid), .s_bready(axi_bready),
+        .s_arid(axi_arid), .s_araddr(axi_araddr), .s_arlen(axi_arlen), .s_arvalid(axi_arvalid), .s_arready(axi_arready),
+        .s_rid(axi_rid), .s_rdata(axi_rdata), .s_rresp(axi_rresp), .s_rlast(axi_rlast), .s_rvalid(axi_rvalid),
+        .s_rready(axi_rready),
+        .u_awid(mu_awid), .u_awaddr(mu_awaddr), .u_awlen(mu_awlen), .u_awvalid(mu_awvalid), .u_awready(mu_awready),
+        .u_wdata(mu_wdata), .u_wstrb(mu_wstrb), .u_wlast(mu_wlast), .u_wvalid(mu_wvalid), .u_wready(mu_wready),
+        .u_bid(mu_bid), .u_bresp(mu_bresp), .u_bvalid(mu_bvalid), .u_bready(mu_bready),
+        .u_arid(mu_arid), .u_araddr(mu_araddr), .u_arlen(mu_arlen), .u_arvalid(mu_arvalid), .u_arready(mu_arready),
+        .u_rid(mu_rid), .u_rdata(mu_rdata), .u_rresp(mu_rresp), .u_rlast(mu_rlast), .u_rvalid(mu_rvalid),
+        .u_rready(mu_rready),
+        .m_awid(dw_awid), .m_awaddr(dw_awaddr), .m_awlen(dw_awlen), .m_awvalid(dw_awvalid), .m_awready(dw_awready),
+        .m_wdata(dw_wdata), .m_wstrb(dw_wstrb), .m_wlast(dw_wlast), .m_wvalid(dw_wvalid), .m_wready(dw_wready),
+        .m_bid(dw_bid), .m_bresp(dw_bresp), .m_bvalid(dw_bvalid), .m_bready(dw_bready),
+        .m_arid(dr_arid), .m_araddr(dr_araddr), .m_arlen(dr_arlen), .m_arvalid(dr_arvalid), .m_arready(dr_arready),
+        .m_rid(dr_rid), .m_rdata(dr_rdata), .m_rresp(dr_rresp), .m_rlast(dr_rlast), .m_rvalid(dr_rvalid),
+        .m_rready(dr_rready),
+        .ev_ddr_wr(ev_ddr_wr), .ev_ddr_rd(ev_ddr_rd), .ev_ddr_oor(ev_ddr_oor)
+    );
+    if (DDR_PORTS == 2) begin : g_ilv
+        // two ports per direction, address-interleaved (rsys_axi_ilv): port n = physical address
+        // bit ILV_BIT; m_axi_ddrw_* / m_axi_ddrr_* = port 0, m_axi_ddrw1_* / m_axi_ddrr1_* = port 1
+        wire logic [ID_W-1:0] i_awid [2], i_bid [2], i_arid [2], i_rid [2];
+        wire logic [39:0]     i_awaddr [2], i_araddr [2];
+        wire logic [7:0]      i_awlen [2], i_arlen [2];
+        wire logic            i_awvalid [2], i_awready [2], i_wlast [2], i_wvalid [2], i_wready [2], i_bvalid [2], i_bready [2];
+        wire logic            i_arvalid [2], i_arready [2], i_rlast [2], i_rvalid [2], i_rready [2];
+        wire logic [511:0]    i_wdata [2], i_rdata [2];
+        wire logic [63:0]     i_wstrb [2];
+        wire logic [1:0]      i_bresp [2], i_rresp [2];
+        rsys_axi_ilv #(.ID_W(ID_W), .AW(40), .ILV_BIT(ILV_BIT)) u_ilv (
+            .clk(clk), .rst(regs_rst),
+            .s_awid(dw_awid), .s_awaddr(dw_awaddr), .s_awlen(dw_awlen), .s_awvalid(dw_awvalid), .s_awready(dw_awready),
+            .s_wdata(dw_wdata), .s_wstrb(dw_wstrb), .s_wlast(dw_wlast), .s_wvalid(dw_wvalid), .s_wready(dw_wready),
+            .s_bid(dw_bid), .s_bresp(dw_bresp), .s_bvalid(dw_bvalid), .s_bready(dw_bready),
+            .s_arid(dr_arid), .s_araddr(dr_araddr), .s_arlen(dr_arlen), .s_arvalid(dr_arvalid), .s_arready(dr_arready),
+            .s_rid(dr_rid), .s_rdata(dr_rdata), .s_rresp(dr_rresp), .s_rlast(dr_rlast), .s_rvalid(dr_rvalid),
+            .s_rready(dr_rready),
+            .m_awid(i_awid), .m_awaddr(i_awaddr), .m_awlen(i_awlen), .m_awvalid(i_awvalid), .m_awready(i_awready),
+            .m_wdata(i_wdata), .m_wstrb(i_wstrb), .m_wlast(i_wlast), .m_wvalid(i_wvalid), .m_wready(i_wready),
+            .m_bid(i_bid), .m_bresp(i_bresp), .m_bvalid(i_bvalid), .m_bready(i_bready),
+            .m_arid(i_arid), .m_araddr(i_araddr), .m_arlen(i_arlen), .m_arvalid(i_arvalid), .m_arready(i_arready),
+            .m_rid(i_rid), .m_rdata(i_rdata), .m_rresp(i_rresp), .m_rlast(i_rlast), .m_rvalid(i_rvalid),
+            .m_rready(i_rready),
+            .ev_wsub(), .ev_rsub()
+        );
+        assign m_axi_ddrw_awid = i_awid[0]; assign m_axi_ddrw_awaddr = i_awaddr[0]; assign m_axi_ddrw_awlen = i_awlen[0];
+        assign m_axi_ddrw_awvalid = i_awvalid[0]; assign i_awready[0] = m_axi_ddrw_awready;
+        assign m_axi_ddrw_wdata = i_wdata[0]; assign m_axi_ddrw_wstrb = i_wstrb[0]; assign m_axi_ddrw_wlast = i_wlast[0];
+        assign m_axi_ddrw_wvalid = i_wvalid[0]; assign i_wready[0] = m_axi_ddrw_wready;
+        assign i_bid[0] = m_axi_ddrw_bid; assign i_bresp[0] = m_axi_ddrw_bresp; assign i_bvalid[0] = m_axi_ddrw_bvalid;
+        assign m_axi_ddrw_bready = i_bready[0];
+        assign m_axi_ddrw1_awid = i_awid[1]; assign m_axi_ddrw1_awaddr = i_awaddr[1]; assign m_axi_ddrw1_awlen = i_awlen[1];
+        assign m_axi_ddrw1_awvalid = i_awvalid[1]; assign i_awready[1] = m_axi_ddrw1_awready;
+        assign m_axi_ddrw1_wdata = i_wdata[1]; assign m_axi_ddrw1_wstrb = i_wstrb[1]; assign m_axi_ddrw1_wlast = i_wlast[1];
+        assign m_axi_ddrw1_wvalid = i_wvalid[1]; assign i_wready[1] = m_axi_ddrw1_wready;
+        assign i_bid[1] = m_axi_ddrw1_bid; assign i_bresp[1] = m_axi_ddrw1_bresp; assign i_bvalid[1] = m_axi_ddrw1_bvalid;
+        assign m_axi_ddrw1_bready = i_bready[1];
+        assign m_axi_ddrr_arid = i_arid[0]; assign m_axi_ddrr_araddr = i_araddr[0]; assign m_axi_ddrr_arlen = i_arlen[0];
+        assign m_axi_ddrr_arvalid = i_arvalid[0]; assign i_arready[0] = m_axi_ddrr_arready;
+        assign i_rid[0] = m_axi_ddrr_rid; assign i_rdata[0] = m_axi_ddrr_rdata; assign i_rresp[0] = m_axi_ddrr_rresp;
+        assign i_rlast[0] = m_axi_ddrr_rlast; assign i_rvalid[0] = m_axi_ddrr_rvalid; assign m_axi_ddrr_rready = i_rready[0];
+        assign m_axi_ddrr1_arid = i_arid[1]; assign m_axi_ddrr1_araddr = i_araddr[1]; assign m_axi_ddrr1_arlen = i_arlen[1];
+        assign m_axi_ddrr1_arvalid = i_arvalid[1]; assign i_arready[1] = m_axi_ddrr1_arready;
+        assign i_rid[1] = m_axi_ddrr1_rid; assign i_rdata[1] = m_axi_ddrr1_rdata; assign i_rresp[1] = m_axi_ddrr1_rresp;
+        assign i_rlast[1] = m_axi_ddrr1_rlast; assign i_rvalid[1] = m_axi_ddrr1_rvalid; assign m_axi_ddrr1_rready = i_rready[1];
+    end else begin : g_one
+        assign m_axi_ddrw_awid = dw_awid; assign m_axi_ddrw_awaddr = dw_awaddr; assign m_axi_ddrw_awlen = dw_awlen;
+        assign m_axi_ddrw_awvalid = dw_awvalid; assign dw_awready = m_axi_ddrw_awready;
+        assign m_axi_ddrw_wdata = dw_wdata; assign m_axi_ddrw_wstrb = dw_wstrb; assign m_axi_ddrw_wlast = dw_wlast;
+        assign m_axi_ddrw_wvalid = dw_wvalid; assign dw_wready = m_axi_ddrw_wready;
+        assign dw_bid = m_axi_ddrw_bid; assign dw_bresp = m_axi_ddrw_bresp; assign dw_bvalid = m_axi_ddrw_bvalid;
+        assign m_axi_ddrw_bready = dw_bready;
+        assign m_axi_ddrr_arid = dr_arid; assign m_axi_ddrr_araddr = dr_araddr; assign m_axi_ddrr_arlen = dr_arlen;
+        assign m_axi_ddrr_arvalid = dr_arvalid; assign dr_arready = m_axi_ddrr_arready;
+        assign dr_rid = m_axi_ddrr_rid; assign dr_rdata = m_axi_ddrr_rdata; assign dr_rresp = m_axi_ddrr_rresp;
+        assign dr_rlast = m_axi_ddrr_rlast; assign dr_rvalid = m_axi_ddrr_rvalid; assign m_axi_ddrr_rready = dr_rready;
+        assign m_axi_ddrw1_awid = '0; assign m_axi_ddrw1_awaddr = '0; assign m_axi_ddrw1_awlen = '0;
+        assign m_axi_ddrw1_awvalid = 1'b0; assign m_axi_ddrw1_wdata = '0; assign m_axi_ddrw1_wstrb = '0;
+        assign m_axi_ddrw1_wlast = 1'b0; assign m_axi_ddrw1_wvalid = 1'b0; assign m_axi_ddrw1_bready = 1'b0;
+        assign m_axi_ddrr1_arid = '0; assign m_axi_ddrr1_araddr = '0; assign m_axi_ddrr1_arlen = '0;
+        assign m_axi_ddrr1_arvalid = 1'b0; assign m_axi_ddrr1_rready = 1'b0;
+    end
+end else begin : g_noddr
+    assign mu_awid = axi_awid; assign mu_awaddr = axi_awaddr; assign mu_awlen = axi_awlen;
+    assign mu_awvalid = axi_awvalid; assign axi_awready = mu_awready;
+    assign mu_wdata = axi_wdata; assign mu_wstrb = axi_wstrb; assign mu_wlast = axi_wlast;
+    assign mu_wvalid = axi_wvalid; assign axi_wready = mu_wready;
+    assign axi_bid = mu_bid; assign axi_bresp = mu_bresp; assign axi_bvalid = mu_bvalid; assign mu_bready = axi_bready;
+    assign mu_arid = axi_arid; assign mu_araddr = axi_araddr; assign mu_arlen = axi_arlen;
+    assign mu_arvalid = axi_arvalid; assign axi_arready = mu_arready;
+    assign axi_rid = mu_rid; assign axi_rdata = mu_rdata; assign axi_rresp = mu_rresp; assign axi_rlast = mu_rlast;
+    assign axi_rvalid = mu_rvalid; assign mu_rready = axi_rready;
+    assign m_axi_ddrw_awid = '0; assign m_axi_ddrw_awaddr = '0; assign m_axi_ddrw_awlen = '0;
+    assign m_axi_ddrw_awvalid = 1'b0; assign m_axi_ddrw_wdata = '0; assign m_axi_ddrw_wstrb = '0;
+    assign m_axi_ddrw_wlast = 1'b0; assign m_axi_ddrw_wvalid = 1'b0; assign m_axi_ddrw_bready = 1'b0;
+    assign m_axi_ddrr_arid = '0; assign m_axi_ddrr_araddr = '0; assign m_axi_ddrr_arlen = '0;
+    assign m_axi_ddrr_arvalid = 1'b0; assign m_axi_ddrr_rready = 1'b0;
+    assign m_axi_ddrw1_awid = '0; assign m_axi_ddrw1_awaddr = '0; assign m_axi_ddrw1_awlen = '0;
+    assign m_axi_ddrw1_awvalid = 1'b0; assign m_axi_ddrw1_wdata = '0; assign m_axi_ddrw1_wstrb = '0;
+    assign m_axi_ddrw1_wlast = 1'b0; assign m_axi_ddrw1_wvalid = 1'b0; assign m_axi_ddrw1_bready = 1'b0;
+    assign m_axi_ddrr1_arid = '0; assign m_axi_ddrr1_araddr = '0; assign m_axi_ddrr1_arlen = '0;
+    assign m_axi_ddrr1_arvalid = 1'b0; assign m_axi_ddrr1_rready = 1'b0;
+    always_ff @(posedge clk) begin ev_ddr_wr <= 1'b0; ev_ddr_rd <= 1'b0; ev_ddr_oor <= 1'b0; end
+end
+// constant AXI4 attributes of the DDR masters: 64-byte INCR beats, non-coherent (the HP ports
+// are not coherent: the PS software does the cache maintenance), data access
+assign m_axi_ddrw_awsize = 3'd6; assign m_axi_ddrw_awburst = 2'b01; assign m_axi_ddrw_awcache = 4'b0011;
+assign m_axi_ddrw_awprot = 3'b000;
+assign m_axi_ddrr_arsize = 3'd6; assign m_axi_ddrr_arburst = 2'b01; assign m_axi_ddrr_arcache = 4'b0011;
+assign m_axi_ddrr_arprot = 3'b000;
+assign m_axi_ddrw1_awsize = 3'd6; assign m_axi_ddrw1_awburst = 2'b01; assign m_axi_ddrw1_awcache = 4'b0011;
+assign m_axi_ddrw1_awprot = 3'b000;
+assign m_axi_ddrr1_arsize = 3'd6; assign m_axi_ddrr1_arburst = 2'b01; assign m_axi_ddrr1_arcache = 4'b0011;
+assign m_axi_ddrr1_arprot = 3'b000;
+
 wire logic         wtap_valid, wtap_last;
 wire logic [63:0]  wtap_addr, wtap_keep;
 wire logic [511:0] wtap_data;
@@ -607,15 +916,15 @@ rsys_axi_mem #(
     .BYTES(MEM_BYTES), .PAT_EN(SELFTEST), .PAT_BIT(PAT_BIT), .ID_W(ID_W), .ADDR_W(64), .FW_AW(18), .RD_LAT(3)
 ) u_mem (
     .clk(clk), .rst(regs_rst), .seed(cfg[C_WC_SEED]),
-    .s_axi_awid(axi_awid), .s_axi_awaddr(axi_awaddr), .s_axi_awlen(axi_awlen),
-    .s_axi_awvalid(axi_awvalid), .s_axi_awready(axi_awready),
-    .s_axi_wdata(axi_wdata), .s_axi_wstrb(axi_wstrb), .s_axi_wlast(axi_wlast),
-    .s_axi_wvalid(axi_wvalid), .s_axi_wready(axi_wready),
-    .s_axi_bid(axi_bid), .s_axi_bresp(axi_bresp), .s_axi_bvalid(axi_bvalid), .s_axi_bready(axi_bready),
-    .s_axi_arid(axi_arid), .s_axi_araddr(axi_araddr), .s_axi_arlen(axi_arlen),
-    .s_axi_arvalid(axi_arvalid), .s_axi_arready(axi_arready),
-    .s_axi_rid(axi_rid), .s_axi_rdata(axi_rdata), .s_axi_rresp(axi_rresp), .s_axi_rlast(axi_rlast),
-    .s_axi_rvalid(axi_rvalid), .s_axi_rready(axi_rready),
+    .s_axi_awid(mu_awid), .s_axi_awaddr(mu_awaddr), .s_axi_awlen(mu_awlen),
+    .s_axi_awvalid(mu_awvalid), .s_axi_awready(mu_awready),
+    .s_axi_wdata(mu_wdata), .s_axi_wstrb(mu_wstrb), .s_axi_wlast(mu_wlast),
+    .s_axi_wvalid(mu_wvalid), .s_axi_wready(mu_wready),
+    .s_axi_bid(mu_bid), .s_axi_bresp(mu_bresp), .s_axi_bvalid(mu_bvalid), .s_axi_bready(mu_bready),
+    .s_axi_arid(mu_arid), .s_axi_araddr(mu_araddr), .s_axi_arlen(mu_arlen),
+    .s_axi_arvalid(mu_arvalid), .s_axi_arready(mu_arready),
+    .s_axi_rid(mu_rid), .s_axi_rdata(mu_rdata), .s_axi_rresp(mu_rresp), .s_axi_rlast(mu_rlast),
+    .s_axi_rvalid(mu_rvalid), .s_axi_rready(mu_rready),
     .s_pcmd_valid(q_rd_valid), .s_pcmd_ready(q_rd_ready), .s_pcmd_addr(q_rd_addr), .s_pcmd_len(q_rd_len),
     .m_pdat_tdata(q_rdd_tdata), .m_pdat_tvalid(q_rdd_tvalid), .m_pdat_tready(q_rdd_tready),
     .s_fw_awaddr(ma_awaddr[17:0]), .s_fw_awvalid(ma_awvalid[2]), .s_fw_awready(ma_awready[2]),
@@ -708,19 +1017,19 @@ function automatic logic [4:0] fr_class(input logic [511:0] d);
             r && (op[7:6] == 2'b00) && (op[4:0] <= 5'h0C)};
 endfunction
 
-wire logic tx_sof = tx_tvalid && tx_tready && tx_first;
-wire logic rx_sof = rx_tvalid && rx_first;
+wire logic tx_sof = w_tx_tvalid && w_tx_tready && tx_first;
+wire logic rx_sof = w_rx_tvalid && rx_first;
 logic [4:0]  tx_cls = '0, rx_cls = '0;
 logic        ev_tx_sof = 1'b0, ev_rx_sof = 1'b0, ev_tx_unf = 1'b0;
 logic [15:0] tx_bytes_add, rx_bytes_add;
 always_ff @(posedge clk) begin
     ev_tx_sof    <= tx_sof;
     ev_rx_sof    <= rx_sof;
-    tx_cls       <= tx_sof ? fr_class(tx_tdata) : 5'd0;
-    rx_cls       <= rx_sof ? fr_class(rx_tdata) : 5'd0;
-    tx_bytes_add <= (tx_tvalid && tx_tready) ? 16'($countones(tx_tkeep)) : 16'd0;
-    rx_bytes_add <= rx_tvalid ? 16'($countones(rx_tkeep)) : 16'd0;
-    ev_tx_unf    <= !tx_first && !tx_tvalid;     // inside a frame, nothing offered
+    tx_cls       <= tx_sof ? fr_class(w_tx_tdata) : 5'd0;
+    rx_cls       <= rx_sof ? fr_class(w_rx_tdata) : 5'd0;
+    tx_bytes_add <= (w_tx_tvalid && w_tx_tready) ? 16'($countones(w_tx_tkeep)) : 16'd0;
+    rx_bytes_add <= w_rx_tvalid ? 16'($countones(w_rx_tkeep)) : 16'd0;
+    ev_tx_unf    <= !tx_first && !w_tx_tvalid;     // inside a frame, nothing offered
 end
 
 // ---------------- latency (self-test) ----------------
@@ -733,7 +1042,7 @@ if (SELFTEST) begin : g_lat
     rsys_lat #(.TRK_DEPTH(1024)) u_lat (
         .clk(clk), .rst(st_rst), .clr(stats_clr), .now(now),
         .arm(cfg_wr[C_LP_ARM]), .wr_fire(wg_fire), .cpl_fire(wc_valid), .cpl_lost(wc_data[31:24] != 8'd0),
-        .tx_sof(tx_sof), .tx_info(fr_info(tx_tdata)), .rx_sof(rx_sof), .rx_info(fr_info(rx_tdata)),
+        .tx_sof(tx_sof), .tx_info(fr_info(w_tx_tdata)), .rx_sof(rx_sof), .rx_info(fr_info(w_rx_tdata)),
         .t_wr(lp_t_wr), .t_cpl(lp_t_cpl), .tx_t(lp_tx_t), .tx_i(lp_tx_i), .rx_t(lp_rx_t), .rx_i(lp_rx_i),
         .flags(lp_flags), .lat_min(lat_min), .lat_max(lat_max), .lat_cnt(lat_cnt), .lat_add(lat_add),
         .ev_ovf(ev_lat_ovf), .ovf(lat_ovf)
@@ -745,6 +1054,10 @@ end else begin : g_nolat
     end
     assign lp_flags = '0; assign lat_add = '0; assign ev_lat_ovf = 1'b0; assign lat_ovf = 1'b0;
 end
+
+// ---------------- event levels for the always-on block's interrupt aggregation ----------------
+always_ff @(posedge clk) evt <= {2'd0, raw_busy, od_pending, rcq_level != 8'd0, wcq_level != 8'd0,
+                                 crx_level != 8'd0, irq};
 
 // ---------------- statistics ----------------
 logic [31:0] wc_last, rc_imm_last;
@@ -813,6 +1126,12 @@ always_comb begin
     ev[E_CRX_LONG]       = ev_crx_long;
     ev[E_CRX_FILT]       = ev_crx_filt;
     ev[E_HP_FRAMES]      = ev_h_frame;
+    ev[E_ODMA_RX]        = ev_od_rx;
+    ev[E_ODMA_DROP]      = ev_od_drop;
+    ev[E_ODMA_TX]        = ev_od_tx;
+    ev[E_DDR_WR_BURSTS]  = ev_ddr_wr;
+    ev[E_DDR_RD_BURSTS]  = ev_ddr_rd;
+    ev[E_DDR_OOR]        = ev_ddr_oor;
 
     for (int i = 0; i < NBC; i++) bc_add[i] = '0;
     bc_add[B_CYCLES]          = 16'd1;
@@ -833,9 +1152,10 @@ always_comb begin
 
     for (int i = 0; i < NSV; i++) sv[i] = '0;
     sv[S_ID]          = 32'h52535953;   // "RSYS"
-    sv[S_SYS_CFG]     = {16'd0, 8'($clog2(MEM_BYTES)), 5'd0, PAY_EN, SELFTEST, SELFTEST};
+    sv[S_SYS_CFG]     = {8'(MAC_WIDTH / 8), 8'(LINK_GBPS), 8'($clog2(MEM_BYTES)), 3'd0, ODMA_EN, DDR_EN, PAY_EN,
+                         SELFTEST, SELFTEST};
     sv[S_STATUS]      = {25'd0, irq, rinj_armed, inj_armed, lat_ovf, cap_status[0], wg_running, st_rst};
-    sv[S_MAC_STAT]    = {20'd0, mac_st};
+    sv[S_MAC_STAT]    = {18'd0, mac_st};
     sv[S_WQ_STATUS]   = {14'd0, q_pay_busy, wq_full, 7'd0, wq_level};
     sv[S_WCQ]         = wcq_head;
     sv[S_RCQ]         = rcq_head;

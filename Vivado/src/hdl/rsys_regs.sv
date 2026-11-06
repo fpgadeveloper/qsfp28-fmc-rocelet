@@ -66,6 +66,8 @@ function automatic logic [31:0] cfg_default(input int i);
     case (i)
         C_MAC_CTL:  return 32'h00000003 | (32'(RSFEC) << 5);   // rx enable, tx enable, RS-FEC
         C_MAC_PZ:   return 32'h00800100;      // PAUSE quanta 0x100, refresh 0x80
+        C_MAC_ADDR_LO: return 32'h72350A02;   // 02:0a:35:72:6c:01 (the firmware's default MAC)
+        C_MAC_ADDR_HI: return 32'h0000016C;
         C_INJ_BYTE: return 32'd53;            // corrupt the BTH PSN low byte
         C_RINJ_BYTE: return 32'd53;
         C_CRX_PORTS: return {16'd12268, 16'd8192};   // HSB BOOTP reply, HSB register protocol

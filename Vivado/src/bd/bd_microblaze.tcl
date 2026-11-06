@@ -18,6 +18,9 @@
 #     statistics block is NOT built: the CMAC is configured through its static
 #     ctl_* ports, driven by rocelet_sys registers, and a few fabric counters
 #     replace the statistics.
+#   cmac_adapt (module reference mac_cmac_adapt): the CMAC's ctl_* / stat_* ports
+#     behind rocelet_sys's generic MAC boundary (mac_ctl / mac_pz out, mac_stat /
+#     mac_ev / mac_pause in), combinational
 #   rocelet_sys_0 (module reference rocelet_sys_bd): the rocelet engine
 #     (submodules/rocelet), its on-chip memory window, the firmware work-request
 #     queue and (selftest) the self-test logic, all on the CMAC user clock
@@ -166,6 +169,9 @@ foreach {name bit} {modsell 0 resetl 1 lpmode 2 cmac_rst 3} {
 
 #########################################################
 # CMAC 100G (port 0 of the OP120 = FMC DP0-3)
+# Placement from data.json (scripts/build.tcl): cmac_core = the CMAC site, cmac_gt_group =
+# the quad of gt_channels (lowest~highest site; the IP numbers the lanes in ascending site
+# order, qsfp0_gt[i] = channel i, the XDC pins follow it)
 #########################################################
 create_bd_cell -type ip -vlnv xilinx.com:ip:cmac_usplus cmac
 set_property -dict [list \
@@ -180,8 +186,8 @@ set_property -dict [list \
   CONFIG.INCLUDE_AUTO_NEG_LT_LOGIC {0} \
   CONFIG.TX_FLOW_CONTROL {1} \
   CONFIG.RX_FLOW_CONTROL {1} \
-  CONFIG.CMAC_CORE_SELECT {CMACE4_X0Y0} \
-  CONFIG.GT_GROUP_SELECT {X0Y12~X0Y15} \
+  CONFIG.CMAC_CORE_SELECT $cmac_core \
+  CONFIG.GT_GROUP_SELECT $cmac_gt_group \
 ] [get_bd_cells cmac]
 # 802.3x PAUSE frames sent by the CMAC carry the FPGA's MAC as source address
 # (default 00:00:00:00:00:00); the firmware's default MAC is 02:0a:35:72:6c:01
@@ -220,8 +226,11 @@ set_property -dict $cfg [get_bd_cells rocelet_sys_0]
 connect_bd_net [get_bd_pins cmac/gt_txusrclk2] [get_bd_pins rocelet_sys_0/clk]
 connect_bd_net [get_bd_pins clk_wiz_0/clk_out2] [get_bd_pins rocelet_sys_0/gen_clk]
 connect_bd_net [get_bd_pins $periph_rst] [get_bd_pins rocelet_sys_0/sys_rst]
-connect_bd_net [get_bd_pins cmac/usr_tx_reset] [get_bd_pins rocelet_sys_0/mac_tx_rst]
-connect_bd_net [get_bd_pins cmac/usr_rx_reset] [get_bd_pins rocelet_sys_0/mac_rx_rst]
+# no netdev DMA channel on this target: its clock input is tied to the system clock, its
+# frame input to idle and its frame output to ready
+connect_bd_net [get_bd_pins $sys_clk] [get_bd_pins rocelet_sys_0/dma_clk]
+connect_bd_net [get_bd_pins const_low/dout] [get_bd_pins rocelet_sys_0/s_axis_otx_tvalid]
+connect_bd_net [get_bd_pins const_high/dout] [get_bd_pins rocelet_sys_0/m_axis_orx_tready]
 
 # AXI-Lite (512 KB window: engine registers, system registers, memory window)
 connect_bd_intf_net [get_bd_intf_pins rocelet_sys_0/S_AXIL] [periph_m 5]
@@ -248,16 +257,22 @@ if {[catch {connect_bd_intf_net [get_bd_intf_pins rocelet_sys_0/M_AXIS_TX] [get_
   }
 }
 
-# 802.3x flow control: received PAUSE (honoured by the engine's TX gate) and PAUSE
-# requests from the engine's RX FIFO level
-foreach {a b} {stat_rx_pause_req pause_rx_req stat_rx_pause_valid pause_rx_valid \
-               stat_rx_pause_quanta8 pause_rx_quanta8 stat_rx_pause pause_rx_frame \
-               stat_tx_pause pause_tx_frame} {
-  connect_bd_net [get_bd_pins cmac/$a] [get_bd_pins rocelet_sys_0/$b]
+# generic MAC boundary <-> CMAC: the adapter (802.3x flow control: received PAUSE honoured by
+# the engine's TX gate, PAUSE requests from the engine's RX FIFO level; static control from
+# rocelet_sys C_MAC_CTL / C_MAC_PZ; status and statistics)
+create_bd_cell -type module -reference mac_cmac_adapt cmac_adapt
+foreach p {mac_ctl mac_pz} {
+  connect_bd_net [get_bd_pins rocelet_sys_0/$p] [get_bd_pins cmac_adapt/$p]
 }
-connect_bd_net [get_bd_pins rocelet_sys_0/pause_tx_req] [get_bd_pins cmac/ctl_tx_pause_req]
+foreach p {mac_stat mac_ev mac_pause} {
+  connect_bd_net [get_bd_pins cmac_adapt/$p] [get_bd_pins rocelet_sys_0/$p]
+}
+foreach p {stat_rx_pause_req stat_rx_pause_valid stat_rx_pause_quanta8 stat_rx_pause stat_tx_pause \
+           usr_rx_reset usr_tx_reset} {
+  connect_bd_net [get_bd_pins cmac/$p] [get_bd_pins cmac_adapt/$p]
+}
+connect_bd_net [get_bd_pins cmac_adapt/ctl_tx_pause_req] [get_bd_pins cmac/ctl_tx_pause_req]
 
-# CMAC static control (rocelet_sys C_MAC_CTL / C_MAC_PZ)
 foreach {a b} {ctl_rx_enable ctl_rx_enable ctl_tx_enable ctl_tx_enable ctl_tx_send_rfi ctl_tx_send_rfi \
                ctl_tx_send_lfi ctl_tx_send_lfi ctl_tx_send_idle ctl_tx_send_idle \
                ctl_rsfec ctl_tx_rsfec_enable ctl_rsfec ctl_rx_rsfec_enable \
@@ -269,7 +284,7 @@ foreach {a b} {ctl_rx_enable ctl_rx_enable ctl_tx_enable ctl_tx_enable ctl_tx_se
                ctl_rx_pause_vec ctl_rx_pause_enable ctl_rx_pause_vec ctl_rx_pause_ack \
                ctl_tx_pause_vec ctl_tx_pause_enable ctl_tx_pause_quanta ctl_tx_pause_quanta8 \
                ctl_tx_pause_refresh ctl_tx_pause_refresh_timer8 ctl_gt_loopback gt_loopback_in} {
-  connect_bd_net [get_bd_pins rocelet_sys_0/$a] [get_bd_pins cmac/$b]
+  connect_bd_net [get_bd_pins cmac_adapt/$a] [get_bd_pins cmac/$b]
 }
 
 # CMAC status and statistics
@@ -278,7 +293,7 @@ foreach p {stat_rx_aligned stat_rx_status stat_rx_local_fault stat_rx_remote_fau
            stat_rx_misaligned stat_rx_rsfec_hi_ser stat_rx_rsfec_lane_alignment_status \
            stat_rx_total_packets stat_rx_bad_fcs stat_rx_bad_code stat_rx_rsfec_corrected_cw_inc \
            stat_rx_rsfec_uncorrected_cw_inc stat_tx_total_packets stat_tx_bad_fcs tx_unfout} {
-  connect_bd_net [get_bd_pins cmac/$p] [get_bd_pins rocelet_sys_0/$p]
+  connect_bd_net [get_bd_pins cmac/$p] [get_bd_pins cmac_adapt/$p]
 }
 
 # every other CMAC input (test patterns, priority PAUSE, DRP,

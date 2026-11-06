@@ -15,7 +15,7 @@
 //   0 flags 0 | 4 psn (engine) | 8 crc 0 | 12 timestamp_s u64 + 20 timestamp_ns u32 (time of
 //   the frame start) | 24 bytes_written u64 = frame bytes | 32 pad | 34 frame_number u16 |
 //   36 metadata_s u64 + 44 metadata_ns u32 (time of the metadata WR) | zeros.
-// Sources (cfg_src): 0 = the IQ16 beats of rsys_iq_src (16 complex int16 samples per beat,
+// Sources (cfg_src; through the s_axis_src boundary and rsys_src_mux): 0 = the IQ16 beats of rsys_iq_src (16 complex int16 samples per beat,
 // in stream order), 1 = a counter pattern that a host can check without a model: 64-bit
 // little-endian word w of a frame = {frame_number[15:0], byte offset 8w [47:0]}, 2 = the beam
 // array generator rsys_beam_src (docs/source/beam_contract.md), 3 = as 0. For source 2 the
@@ -59,19 +59,17 @@ module rsys_hsb_prod (
     input  wire logic [47:0]   t_s,
     input  wire logic [29:0]   t_ns,
 
-    input  wire logic          s_iq_valid,
-    input  wire logic [511:0]  s_iq_data,
-    output wire logic          s_iq_pop,
-    output wire logic          iq_enable,     // keep the IQ generator running
-    output logic               iq_start = 1'b0, // pulse: a run with the IQ source starts
-
-    input  wire logic          s_bm_valid,
-    input  wire logic [511:0]  s_bm_data,
-    input  wire logic [31:0]   s_bm_sid,      // scene side-band of the head beat
-    input  wire logic [31:0]   s_bm_sframe,
-    output wire logic          s_bm_pop,
-    output wire logic          bm_enable,     // a run with the beam source is active
-    output logic               bm_start = 1'b0, // pulse: a run with the beam source starts
+    // sample source boundary (rsys_src_mux selects the source by src_sel): 64-byte beats,
+    // show-ahead (tvalid + tdata of the head beat, tready = consume it); tuser = side-band of
+    // the beat ({scene_id, scene_frame} of the beam generator), taken from the frame's first
+    // beat into the metadata record when src_sel = 2
+    input  wire logic          s_axis_src_tvalid,
+    input  wire logic [511:0]  s_axis_src_tdata,
+    input  wire logic [63:0]   s_axis_src_tuser,
+    output wire logic          s_axis_src_tready,
+    output wire logic [1:0]    src_sel,       // source of the current run (0 IQ16, 1 counter, 2 beam)
+    output wire logic          src_enable,    // a run is active (keep the source running)
+    output logic               src_start = 1'b0, // pulse: a run starts (src_sel already valid)
 
     output wire logic          m_wr_valid,
     input  wire logic          m_wr_ready,
@@ -154,8 +152,8 @@ always_comb
 always_comb begin
     in_v = 1'b0; in_l = 1'b0; in_d = cnt_beat;
     if (st == S_PAY) begin
-        in_v = (l_src == 2'd1) ? 1'b1 : ((l_src == 2'd2) ? s_bm_valid : s_iq_valid);
-        in_d = (l_src == 2'd1) ? cnt_beat : ((l_src == 2'd2) ? s_bm_data : s_iq_data);
+        in_v = (l_src == 2'd1) ? 1'b1 : s_axis_src_tvalid;
+        in_d = (l_src == 2'd1) ? cnt_beat : s_axis_src_tdata;
         in_l = b_last;
     end else if (st == S_MPAY) begin
         in_v = 1'b1;
@@ -164,8 +162,8 @@ always_comb begin
     end
 end
 wire logic push = in_v && sk_rdy;
-assign s_iq_pop = (st == S_PAY) && l_src == 2'd0 && push;
-assign s_bm_pop = (st == S_PAY) && l_src == 2'd2 && push;
+assign s_axis_src_tready = (st == S_PAY) && l_src != 2'd1 && push;
+assign src_sel = l_src;
 
 rsys_skid u_sk (
     .clk(clk), .rst(rst),
@@ -177,8 +175,7 @@ rsys_skid u_sk (
 assign pay_busy   = (st == S_PAY) || (st == S_MPAY) || m_pay_tvalid;
 assign m_wr_valid = (st == S_DESC) || (st == S_MDESC);
 assign running    = (st != S_IDLE);
-assign iq_enable  = (st != S_IDLE);
-assign bm_enable  = (st != S_IDLE) && l_src == 2'd2;
+assign src_enable = (st != S_IDLE);
 
 // ---------------- control ----------------
 wire logic [31:0] wl_n = (left > l_wrmax) ? l_wrmax : left;
@@ -186,8 +183,7 @@ wire logic [31:0] wl_n = (left > l_wrmax) ? l_wrmax : left;
 always_ff @(posedge clk) begin
     run_q       <= run;
     period_q    <= cfg_period;
-    iq_start    <= 1'b0;
-    bm_start    <= 1'b0;
+    src_start   <= 1'b0;
     ev_frame    <= 1'b0;
     bytes_add   <= (push && st == S_PAY) ? 16'd64 : 16'd0;
     ev_stall_iq <= (st == S_PAY) && l_src != 2'd1 && !in_v && sk_rdy;
@@ -213,8 +209,7 @@ always_ff @(posedge clk) begin
                 frames   <= '0;
                 wseq     <= '0;
                 tmr      <= '0;
-                iq_start <= (cfg_src == 2'd0 || cfg_src == 2'd3);
-                bm_start <= (cfg_src == 2'd2);
+                src_start <= 1'b1;
                 st       <= S_WAIT;
             end
         end
@@ -252,8 +247,8 @@ always_ff @(posedge clk) begin
             if (push) begin
                 f_first <= 1'b0;
                 if (f_first) begin
-                    md_sid    <= s_bm_sid;
-                    md_sframe <= s_bm_sframe;
+                    md_sid    <= s_axis_src_tuser[63:32];
+                    md_sframe <= s_axis_src_tuser[31:0];
                 end
                 bleft  <= bleft - 26'd1;
                 b_last <= (bleft == 26'd2);

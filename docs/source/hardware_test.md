@@ -7,6 +7,15 @@ inbox `mlx5` driver and rdma-core 50, Ubuntu 24.04, Linux 6.8) in a Lenovo P520 
 forced 100G with RS-FEC on at both ends; the same link was also checked over a 3 m 100G QSFP28
 active optical cable (AOC), see section 4.
 
+```{note}
+**ZCU106.** The same recipes work with the `zcu106` target at 40G (or 10G): force the host port
+to `speed 40000` with FEC off instead of 100G / RS-FEC ([](host_setup.md#4-the-port-that-faces-the-board)),
+and on the Linux image prefix every console command with `rl` (locally or over SSH:
+`ssh amd-edf@<board> rl qp 0`; the record exchange is shown in
+[](zynqmp_linux.md#connecting-a-host-qp-records)). The ZCU106 adds memory window `mr=3`, the
+PS DDR window. Its measurements are on [](resources.md#measured-zcu106-40g-and-10g).
+```
+
 ## 1. The host
 
 The host tools are part of the rocelet repository (the design's submodule):
@@ -27,7 +36,7 @@ make -C submodules/rocelet/host test       # self-tests, no RDMA device needed
 Prepare the port that faces the FPGA. The commands below are for a ConnectX-6 Dx; on the bench
 host its netdev is `enp179s0f0np0` and its RDMA device `rocep179s0f0` (`ibv_devices` lists
 yours). Every change is limited to that port and reversible. The full list of host rules, with
-the reasons, is in the rocelet docs, [Host setup and host rules](https://rocelet.ethernetfmc.com/host-setup.html)
+the reasons, is in the rocelet docs, [Host setup and host rules](https://rocelet.ethernetfmc.com/en/latest/host-setup.html)
 (`submodules/rocelet/docs/host-setup.md`).
 
 | What | Command |
@@ -55,7 +64,7 @@ reports the GT reference clock, the link and the engine:
 ```
 Si5328 programmed: GT reference clock 322.265625 MHz
 Port 0: link up, 100 Gb/s, RS-FEC on, loopback off (external) (2600 ms)
-qsfp28-fmc-rocelet 0.4.0 | rocelet 0.2.2: 16 QPs, 16 MRs, RING 256 KB, 128 WRs, READ depth 16, ...
+qsfp28-fmc-rocelet 0.5.0 | rocelet 0.3.0: 16 QPs, 16 MRs, RING 256 KB, 128 WRs, READ depth 16, ...
 rl>
 ```
 
@@ -107,7 +116,9 @@ records into the console, start the traffic.
        --fpga-mr 1 --peer 'RLF qp=0 ...' --peer 'RLFM mr=1 ...'
    ```
 
-   It prints its own records (`RLH ...`, `RLHM ...`, also written to `--record-out FILE`).
+   It prints its own records (`RLH ...`, `RLHM ...`, also written to `--record-out FILE`). For
+   the reader, `fill` ([](console.md#transfers)) writes the pattern it checks into the memory
+   window.
 
 3. Paste both lines into the console: `RLH` configures FPGA QP 0 towards the host QP, `RLHM`
    sets the host buffer the FPGA writes into.
@@ -128,9 +139,8 @@ clamp), `pause` (802.3x), `cap` / `capd` (capture a frame for `roce_check.py --h
 
 ## 4. Notes for an NVIDIA ConnectX-6 Dx host
 
-The ConnectX-6 Dx is the release's validation partner (3 m DAC, RS-FEC, MTU 4200). The first
-session ran rocelet v0.1 with the console's former 200 us ACK timeout; the READ, link-loss and
-throughput items were re-checked with v0.2.0, v0.2.1 and the release v0.2.2 (section 7).
+The ConnectX-6 Dx is the release's validation partner (3 m DAC, RS-FEC, MTU 4200); the
+measurements, with the engine version of each, are in section 7.
 
 * **DAC or AOC, no setting changes.** All measurements on this page were taken over a 3 m passive
   QSFP28 DAC. With design 0.4.0 the DAC was swapped for a 3 m 100G QSFP28 AOC (module class "100G
@@ -152,15 +162,14 @@ throughput items were re-checked with v0.2.0, v0.2.1 and the release v0.2.2 (sec
   a FIRST ... LAST answer to it (work completion "bad response", host QP error): keep
   `rcont 1`, the default (restored by `setup`).
 * **READs in flight.** With READ-response loss and `max_rd_atomic` 16 the ConnectX-6 re-issues
-  READs within microseconds; rocelet v0.1 counted the re-issues against `READ_DEPTH` and NAKed
-  a legitimate READ (invalid request, the host QP failed; `--max-rd 8` avoided it). rocelet
-  v0.2 counts only new READs: give the host `READ_DEPTH` (16).
+  READs within microseconds; rocelet counts only new READs against `READ_DEPTH`, so give the
+  host `READ_DEPTH` (16).
 * **Wrong R_Key.** The ConnectX-6 answers an RDMA WRITE or WRITE with immediate to a wrong
   R_Key with a NAK (remote access error, AETH 0x62) about 1.3-1.8 ms after the request (well
   inside the default budget of 8 x 5 ms); the FPGA QP then reports requester error 0x62, the
-  host a receive completion error (local access error) with its QP in error. With the v0.1
-  console's 8 x 200 us budget the NAK came too late and the FPGA QP ended with retry exceeded
-  (0xFF).
+  host a receive completion error (local access error) with its QP in error. With an ACK
+  timeout budget (`to` x 8) shorter than that delay the FPGA QP ends with retry exceeded (0xFF)
+  instead.
 * **Counters.** mlx5 counts RoCE transport events in
   `/sys/class/infiniband/<dev>/ports/1/hw_counters/` (`out_of_sequence`, `packet_seq_err`,
   `implied_nak_seq_err`, `out_of_buffer`, `roce_adp_retrans`, ...); `rocelet_host` watches them.
@@ -178,27 +187,21 @@ throughput items were re-checked with v0.2.0, v0.2.1 and the release v0.2.2 (sec
 * **READ at PMTU 1024** reaches 81 Gb/s against the ConnectX-6 (about 9.9 M READ responses
   per second); at PMTU 2048 95.1 Gb/s.
 * **Link drops.** `t pma` takes the link away from the ConnectX-6 for about 5 s (the
-  link goes down twice; a ConnectX-6 needs 2.3-3 s per link-up). rocelet v0.2 holds its ACK timeouts while the link is down
-  (CMAC not aligned, or a local / remote fault) and for `grace` (2 s) after it returns, so FPGA
-  QPs with data in flight survive this and cable pulls of any length (v0.2.0 on the bench: a
-  35.6 s DAC pull and forced drops of 5-60 s, 0 lost messages); the host QP's survival depends
-  on its own `timeout` / `retry_cnt` ([Host setup and host rules](https://rocelet.ethernetfmc.com/host-setup.html),
-  "Link flaps and cable pulls"). A host-side port reconfiguration (`ethtool -s <if> speed 50000` with
-  `KEEP_ETH_LINK_UP`) is the hard case: the ConnectX-6 stops answering 15-25 ms before the FPGA
-  loses alignment. With the v0.2.0 defaults (ACK timeout 1 ms x 8) the FPGA QP died at the start
-  of such a drop; with `to 5000` it survived 5-60 s drops, hence the 5 ms default since console
-  0.2.1. With the fault terms in `link_up` (since 0.2.1) the hold engages within one 5 ms
-  timeout of such a drop (5 s and 30 s forced drops at the defaults: 1 timeout each, 0 lost),
-  and the grace starts only at the ConnectX-6's own link-up (its carrier returned 4.4-5.6 s
-  after a CMAC reset, the engine's link within 0.22 s of it). Console 0.2.1 used a 6 s grace
-  (chosen when the grace started at alignment: the ConnectX-6 reports its link 2.4-2.9 s after
-  the FPGA, 5.1-5.4 s after an FPGA-side relink), which then stalled every link loss ~6 s
-  after the partner was back; grace 0, 1 s and 3 s all survived 5 s forced drops, hence 2 s
-  since console 0.2.2 (margin for a partner whose port is up before it answers). `t pma` takes
-  about 3 s with the 2 s grace (6.8 s with 6 s). Checked on hardware at the defaults: a real
-  cable pull (14.9 s outage during a 40 Gb/s stream) resumed 1.9 s after the ConnectX-6
-  carrier returned with 1 timeout and nothing lost; forced 5 s / 30 s drops resumed 1.8 / 2.0 s
-  after the carrier; `t pma` 2.8 s.
+  link goes down twice; a ConnectX-6 needs 2.3-3 s per link-up). rocelet holds its ACK timeouts
+  while the link is down (CMAC not aligned, or a local / remote fault) and for `grace` (2 s)
+  after it returns, so FPGA QPs with data in flight survive this and cable pulls of any length;
+  the host QP's survival depends on its own `timeout` / `retry_cnt`
+  ([Host setup and host rules](https://rocelet.ethernetfmc.com/en/latest/host-setup.html),
+  "Link flaps and cable pulls"). A host-side port reconfiguration (`ethtool -s <if> speed 50000`
+  with `KEEP_ETH_LINK_UP`) is the hard case: the ConnectX-6 stops answering 15-25 ms before the
+  FPGA loses alignment, which the 5 ms ACK timeout with 8 attempts covers; because `link_up`
+  includes the CMAC's fault terms, the hold engages within one 5 ms timeout of such a drop. The
+  grace starts at the ConnectX-6's own link-up (its carrier returns 4.4-5.6 s after a CMAC
+  reset, the engine's link within 0.22 s of it); 2 s leaves margin for a partner whose port is
+  up before it answers. At the defaults a real cable pull (14.9 s outage during a 40 Gb/s
+  stream) resumed 1.9 s after the ConnectX-6 carrier returned with 1 timeout and nothing lost,
+  forced 5 s / 30 s drops resumed 1.8 / 2.0 s after the carrier, and `t pma` takes 2.8 s
+  (section 7).
 
 ## 5. Fault injection and frame capture
 
@@ -308,8 +311,7 @@ Link loss at the release defaults (ACK timeout 5 ms x 8, grace 2 s), FPGA WRITE 
 | console `link` (CMAC reset), no traffic | 5.4-6.0 s | - | engine link within one poll of the carrier, ACK timeouts held for 1.6-2.2 s after it | - | v0.2.2 |
 | `t pma` / `t full pma` with the cable connected | - | - | PASS 19/19 in 2.8 s / 23/23 in 5.1 s | link back by itself | v0.2.2 |
 
-rocelet v0.2.0 (1 ms ACK timeout, 3 s grace from alignment) also survived a 35.6 s DAC pull
-with 1 timeout and nothing lost. Link: RS-FEC uncorrectable blocks 0 on a quiet link at both
+Link: RS-FEC uncorrectable blocks 0 on a quiet link at both
 ends; the FPGA corrected about one RS-FEC codeword per second from the ConnectX-6 (566 in the
 10 min soak), the ConnectX-6 none. The host's kernel log stayed clean apart from link up /
 down lines.

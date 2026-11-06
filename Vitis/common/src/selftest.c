@@ -11,7 +11,7 @@
 #include "sleep.h"
 #include "hw.h"
 #include "util.h"
-#include "cmac.h"
+#include "mac.h"
 #include "eng.h"
 #include "sysif.h"
 #include "selftest.h"
@@ -44,7 +44,7 @@ static void hold_wait(void)
 
 static int link_ok(void)
 {
-	if (!cmac_link_up()) { xil_printf("link down - test not run\r\n"); return 0; }
+	if (!mac_link_up()) { xil_printf("link down - test not run\r\n"); return 0; }
 	hold_wait();
 	return 1;
 }
@@ -243,7 +243,7 @@ int t_soak(u32 secs, u32 len, int pmtu_log2, u32 ppm)
 		xil_printf("soak t=%us rate ", s + 10 > secs ? secs : s + 10); pr_gbps(w1 - w0, c1 - c0);
 		xil_printf(" Gb/s | WRs %u mism %u ICRC bad %u recoveries %u | link %s\r\n", cnt(RSYS_E_WG_ISSUED),
 			   cnt(RSYS_E_WC_MISM), eng_rd(ROCELET_CNT_RX_ICRC_BAD), eng_rd(ROCELET_CNT_REQ_RTX),
-			   cmac_link_up() ? "up" : "DOWN");
+			   mac_link_up() ? "up" : "DOWN");
 		c0 = c1; w0 = w1;
 	}
 	wg_stop();
@@ -685,10 +685,10 @@ int selftest(int quick)
 	xil_printf("=== self-test: rocelet %d.%d.%d, %d QPs, %s, READ depth %d, self-test logic %s, RS-FEC %s,"
 		   " loopback %s\r\n", (ENG.version >> 16) & 0xFF, (ENG.version >> 8) & 0xFF, ENG.version & 0xFF,
 		   ENG.num_qp, rtx_name(ENG.rtx_mode), ENG.read_depth, ENG.selftest ? "built in" : "not built",
-		   cmac_fec() ? "on" : "off", loop_name(cmac_loop()));
-	verdict("link up", cmac_link_up());
-	int looped = cmac_link_up() && loop_present();
-	if (cmac_link_up()) {
+		   mac_fec() ? "on" : "off", loop_name(mac_loop()));
+	verdict("link up", mac_link_up());
+	int looped = mac_link_up() && loop_present();
+	if (mac_link_up()) {
 		verdict("loopback path (the FPGA's frames come back)", looped);
 		if (!looped)
 			xil_printf("  the link partner does not return the FPGA's frames (a NIC?): the suite needs a QSFP28 loopback"
@@ -725,7 +725,7 @@ int selftest(int quick)
 	}
 	loop_setup(12);
 	xil_printf("SELFTEST %s %d/%d loop=%s fec=%d selftest_logic=%d\r\n", g_fail == 0 ? "PASS" : "FAIL", g_pass,
-		   g_pass + g_fail, cmac_loop() == LOOP_PMA ? "pma" : cmac_loop() == LOOP_PCS ? "pcs" : "external",
-		   cmac_fec(), ENG.selftest);
+		   g_pass + g_fail, mac_loop() == LOOP_PMA ? "pma" : mac_loop() == LOOP_PCS ? "pcs" : "external",
+		   mac_fec(), ENG.selftest);
 	return g_fail == 0 ? 0 : -1;
 }

@@ -7,8 +7,12 @@
 #include "xil_printf.h"
 #include "sleep.h"
 #include "hw.h"
+#include "mac.h"
 #include "util.h"
 #include "eng.h"
+#if defined(HAS_DDR_WIN)
+#include "plat.h"
+#endif
 
 eng_cfg_t ENG;
 u8  MY_MAC[6] = { 0x02, 0x0a, 0x35, 0x72, 0x6c, 0x01 };  /* locally administered */
@@ -61,6 +65,15 @@ void eng_global(void)
 	eng_wr(ROCELET_IP4, MY_IP);
 	eng_wr(ROCELET_IP_HDR, 64u << 8);              /* TTL 64, TOS 0 */
 	eng_wr(ROCELET_TICK_DIV, F_CLK_HZ / 1000000u);    /* 1 tick = 1 us: ACK timeout, RNR wait, LINK_GRACE */
+#if defined(MAC_OMAC)
+	/* omac reports a received PAUSE as a level (it times the quanta itself): the engine's TX
+	 * gate follows that level; PAUSE_QCLK (the quantum for pulse-mode MACs) set for the link
+	 * anyway: 512 bit times at LINK_GBPS in clocks x 256 */
+	eng_ctrl_set(ROCELET_CTRL_PAUSE_RX_LEVEL_MASK, 0);
+	eng_wr(ROCELET_PAUSE_QCLK, (u32)(((u64)512u * 256u * (F_CLK_HZ / 1000u) + (u64)LINK_GBPS * 1000000u - 1) /
+					 ((u64)LINK_GBPS * 1000000u)));
+#endif
+	mac_set_addr(MY_MAC);                          /* source address of the MAC's PAUSE frames */
 	eng_clear();
 }
 
@@ -147,6 +160,14 @@ void eng_mrs_default(void)
 	eng_mr(1, RKEY_MEM, 0, mem, 0, 3);
 	eng_mr(2, RKEY_MEM_RO, 0, mem, 0, 2);
 	for (int i = 3; i < ENG.num_mr; i++) eng_mr(i, 0xDEAD0000u | (u32)i, 0, 0, 0, 0);
+#if defined(HAS_DDR_WIN)
+	/* PS DDR window over the platform's buffer (plat.h; standalone: 1 MB of this program, Linux:
+	 * the reserved-memory carve-out): region = the buffer, MR 3 = offsets 0 .. size-1 */
+	cfg_set(RSYS_C_DDR_BASE_LO, (u32)plat_ddr_pa());
+	cfg_set(RSYS_C_DDR_BASE_HI, (u32)(plat_ddr_pa() >> 32));
+	cfg_set(RSYS_C_DDR_SIZE, plat_ddr_bytes());
+	if (plat_ddr_bytes()) eng_mr(3, RKEY_DDR, 0, plat_ddr_bytes(), DDR_WIN_LADDR, 3);
+#endif
 }
 
 int eng_err(void) { return (eng_rd(ROCELET_STATUS) & ROCELET_STATUS_ERR_MASK) != 0; }

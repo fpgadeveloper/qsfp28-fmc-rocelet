@@ -17,6 +17,10 @@
  *  - the built-in self-test (t) through a QSFP28 loopback plug or the GT
  *    near-end loopback, ending with one "SELFTEST PASS|FAIL ..." line.
  *
+ * console_init() brings the hardware up, console_exec() runs one command line (console.h).
+ * On the standalone BSPs main() below feeds it from the UART; on Linux the daemon roceletd
+ * (sw/linux/roceletd, PLAT_LINUX) feeds it from its control socket (the CLI rl, the web UI).
+ *
  * Copyright (c) 2026 Opsero Electronic Design Inc.
  * SPDX-License-Identifier: MIT
  */
@@ -24,20 +28,21 @@
 #include "xil_printf.h"
 #include "xparameters.h"
 #include "bspconfig.h"
-#include "xuartns550_l.h"
 #include "sleep.h"
 #include "hw.h"
 #include "util.h"
-#include "cmac.h"
+#include "plat.h"
+#include "mac.h"
 #include "eng.h"
 #include "sysif.h"
 #include "selftest.h"
 #include "hsb.h"
+#include "console.h"
 
-#define VERSION "0.4.0"
+#define VERSION "0.5.0"
 #define MAXQP   64
 
-static int g_fec = 1, g_loop = LOOP_OFF;
+static int g_fec = HAS_FEC, g_loop = LOOP_OFF;
 
 /* the remote side of each QP, from the last RLH record (re-commit with another type) */
 typedef struct { int set; u8 mac[6]; u32 ip, qpn, psn; int pmtu, type; u32 dport; } peer_t;
@@ -67,8 +72,8 @@ static void status(void)
 		   ENG.max_wr, ENG.read_depth, ENG.rx_icrc ? "on" : "off", ENG.hsb ? "yes" : "no", ENG.qpn_base,
 		   (1u << ENG.mem_log2) >> 10, ENG.selftest ? "built in" : "not built");
 	xil_printf("FPGA ip "); pr_ip(MY_IP); xil_printf(" mac "); pr_mac(MY_MAC); xil_printf("\r\n");
-	cmac_status();
-	if (!cmac_clk_ok()) return;
+	mac_status();
+	if (!mac_clk_ok()) return;
 	eng_errors();
 	u32 ps = eng_rd(ROCELET_PAUSE_STATUS), wq = sv(RSYS_S_WQ_STATUS), cq = sv(RSYS_S_CQ_LEVEL);
 	u32 ctl = eng_rd(ROCELET_CTRL), est = eng_rd(ROCELET_STATUS);
@@ -104,6 +109,9 @@ static void qp_show(int n)
 	}
 	xil_printf("RLFM mr=1 rkey=0x%x va=0x0 len=0x%x acc=rw\r\n", RKEY_MEM, mem);
 	xil_printf("RLFM mr=2 rkey=0x%x va=0x0 len=0x%x acc=r\r\n", RKEY_MEM_RO, mem);
+#if defined(HAS_DDR_WIN)
+	if (plat_ddr_bytes()) xil_printf("RLFM mr=3 rkey=0x%x va=0x0 len=0x%x acc=rw\r\n", RKEY_DDR, plat_ddr_bytes());
+#endif
 	u32 s = eng_qp_status(n);
 	const char *hl = hsb_qp_label(n);
 	xil_printf("(QP %d status 0x%08x: %s%s%s, type %s)\r\n", n, s, (s & 1) ? "valid" : "disabled",
@@ -276,10 +284,21 @@ static void capd(void)
 	xil_printf("CAPE\r\n");
 }
 
+/* PAUSE settings ('pause'): PAUSE RX off, PAUSE TX = PAUSE_TX_DEFAULT (hw.h) after boot */
+static int g_prx = 0, g_ptx = PAUSE_TX_DEFAULT;
+static u32 g_pq = 0x100, g_prf = 0x80;
+
+static void pause_apply(void)
+{
+	mac_pause(g_prx, g_ptx, g_pq, g_prf);
+	eng_ctrl_set((g_prx ? ROCELET_CTRL_PAUSE_RX_EN_MASK : 0) | (g_ptx ? ROCELET_CTRL_PAUSE_TX_EN_MASK : 0),
+		     (g_prx ? 0 : ROCELET_CTRL_PAUSE_RX_EN_MASK) | (g_ptx ? 0 : ROCELET_CTRL_PAUSE_TX_EN_MASK));
+}
+
 static void pause_cmd(char **argv, int argc)
 {
-	static int rx = 0, tx = 0;
-	static u32 q = 0x100, rf = 0x80;
+	int rx = g_prx, tx = g_ptx;
+	u32 q = g_pq, rf = g_prf;
 	for (int i = 1; i + 1 < argc; i += 2) {
 		if (!strcmp(argv[i], "rx")) rx = (int)arg_u(argv, argc, i + 1, 0);
 		else if (!strcmp(argv[i], "tx")) tx = (int)arg_u(argv, argc, i + 1, 0);
@@ -288,9 +307,8 @@ static void pause_cmd(char **argv, int argc)
 		else if (!strcmp(argv[i], "xoff")) eng_wr(ROCELET_PAUSE_WM, (eng_rd(ROCELET_PAUSE_WM) & 0xFFFF0000u) | arg_u(argv, argc, i + 1, 128));
 		else if (!strcmp(argv[i], "xon")) eng_wr(ROCELET_PAUSE_WM, (eng_rd(ROCELET_PAUSE_WM) & 0xFFFFu) | (arg_u(argv, argc, i + 1, 64) << 16));
 	}
-	cmac_pause(rx, tx, q, rf);
-	eng_ctrl_set((rx ? ROCELET_CTRL_PAUSE_RX_EN_MASK : 0) | (tx ? ROCELET_CTRL_PAUSE_TX_EN_MASK : 0),
-		     (rx ? 0 : ROCELET_CTRL_PAUSE_RX_EN_MASK) | (tx ? 0 : ROCELET_CTRL_PAUSE_TX_EN_MASK));
+	g_prx = rx; g_ptx = tx; g_pq = q; g_prf = rf;
+	pause_apply();
 	u32 wm = eng_rd(ROCELET_PAUSE_WM), ps = eng_rd(ROCELET_PAUSE_STATUS);
 	xil_printf("pause: receive (honour 802.3x) %s | send (from the RX FIFO level) %s, XOFF %u XON %u beats, quanta 0x%x"
 		   " refresh 0x%x | now: gate %d req %d, last quanta 0x%x | frames rx %u tx %u\r\n", rx ? "on" : "off",
@@ -411,10 +429,14 @@ static void help(void)
 		   "  cap <mode 0 any|1 op|2 qpn|3 both> [op] [qpn] [tx] [other] | capd | injoff\r\n"
 		   "  injset <rx 0|1> <0 off|1 drop|2 corrupt> [mode] [class] [skip] [count] [period] [ppm] [byte]\r\n"
 		   "  lp arm | lp   latency probe | rnrt [min_us] [max_us]   RNR wait | rcont [0|1]   READ continuation\r\n"
-		   "  pace <Gb/s, 0 off> [burst]   requester rate limit (all QPs, wire bytes)\r\n");
+		   "  pace <Gb/s, 0 off> [burst]   requester rate limit (all QPs, wire bytes)\r\n"
+#if defined(HAS_DDR_WIN)
+		   " PS DDR window (mr=3): ddr | ddr fill [off] [n] | ddr check [off] [n]\r\n"
+#endif
+		   );
 }
 
-/* commands that work without the CMAC user clock */
+/* commands that work without the MAC user clock */
 static int clock_free(const char *c)
 {
 	return !strcmp(c, "fec") || !strcmp(c, "loop") || !strcmp(c, "link") || !strcmp(c, "st") || !strcmp(c, "help") ||
@@ -424,61 +446,89 @@ static int clock_free(const char *c)
 static void relink(void)
 {
 	hsb_link_event();             /* a running HSB data plane pauses (link pause on) */
-	cmac_relink(g_fec, g_loop);
+	mac_relink(g_fec, g_loop);
 }
 
-int main(void)
-{
-	char line[128];
-	char *argv[12];
+static int g_eng_ok;
 
-	/* the UART 16550 divisor is not set at reset: program it before the first print */
-	XUartNs550_SetBaud(STDOUT_BASEADDRESS, XPAR_AXI_UART16550_0_CLOCK_FREQ, 115200);
-	XUartNs550_SetLineControlReg(STDOUT_BASEADDRESS, XUN_LCR_8_DATA_BITS);
-	/* 16-byte FIFOs: the console loop also serves the HSB control plane between characters */
-	XUartNs550_WriteReg(STDOUT_BASEADDRESS, XUN_FCR_OFFSET, XUN_FIFO_ENABLE | XUN_FIFO_RX_RESET | XUN_FIFO_TX_RESET);
+/* the commands that run the loopback test suite (they re-configure every QP) */
+static const char *const tests[] = { "t", "arp", "wrq", "read", "icrc", "cnpvlan", "access", "write", "tput",
+				     "lat", "inj", "soak" };
+
+int console_is_test(const char *c)
+{
+	for (unsigned k = 0; k < sizeof(tests) / sizeof(tests[0]); k++)
+		if (!strcmp(c, tests[k])) return 1;
+	return 0;
+}
+
+int console_eng_ok(void) { return g_eng_ok; }
+
+void console_init(void)
+{
+	plat_init();                  /* console UART, time base */
+#if defined(HAS_DDR_WIN)
+	if (plat_ddr_init() != 0) xil_printf("WARNING: no PS DDR window buffer (MR 3 not set up)\r\n");
+#endif
 
 	xil_printf("\r\n----------------------------------------------------------------\r\n");
-	xil_printf("qsfp28-fmc-rocelet console %s: rocelet RoCE v2 on KCU116 + 2x QSFP28 FMC\r\n", VERSION);
+	xil_printf("qsfp28-fmc-rocelet console %s: rocelet RoCE v2 on " TARGET_NAME " + 2x QSFP28 FMC (%s, %s"
+		   " %u Gb/s)\r\n", VERSION, plat_cpu(), MAC_NAME, LINK_GBPS);
 	xil_printf("----------------------------------------------------------------\r\n");
-	if (cmac_bringup(g_fec, g_loop) != 0)
+#if defined(MAC_OMAC)
+	{
+		u32 id = aon_rd(AON_ID);
+		if (id != 0x52414F4Eu) xil_printf("ERROR: always-on block not found at 0x%08x (ID 0x%08x)\r\n", AON_REGS, id);
+		else xil_printf("always-on block v%u.%u, build %u, caps 0x%08x\r\n", aon_rd(AON_VERSION) >> 16,
+				aon_rd(AON_VERSION) & 0xFFFF, aon_rd(AON_BUILD_ID), aon_rd(AON_CAPS));
+	}
+#endif
+#if defined(MAC_OMAC)
+	xil_printf("host NIC: QSFP28 port forced to %u Gb/s, auto-negotiation off, FEC off, MTU >= 4200 (ConnectX-6 Dx:\r\n"
+		   "  ethtool -s <if> speed %u000 duplex full autoneg off; ethtool --set-fec <if> encoding off)\r\n",
+		   LINK_GBPS, LINK_GBPS);
+#endif
+	if (mac_bringup(g_fec, g_loop) != 0)
 		xil_printf("WARNING: link not up ('loop pma' runs the self-test without a cable)\r\n");
-	int eng_ok = 0;
-	if (cmac_clk_ok()) {
+	g_eng_ok = 0;
+	if (mac_clk_ok()) {
 		if (eng_probe() != 0) xil_printf("ERROR: rocelet engine / system registers not found at 0x%08x\r\n", RSYS_BASE);
 		else {
-			eng_ok = 1;
+			g_eng_ok = 1;
 			loop_setup(12);
+			pause_apply();        /* the boot default (PAUSE_TX_DEFAULT) */
+			if (g_ptx) xil_printf("PAUSE TX on (802.3x from the RX FIFO level; 'pause tx 0' turns it off)\r\n");
 			status();
 		}
 	}
 	help();
-	for (;;) {
-		xil_printf("rl> ");
-		while (!getline_poll(line, sizeof(line)))
-			if (eng_ok && hsb_on() && cmac_clk_ok() && !XUartNs550_IsReceiveData(STDIN_BASEADDRESS)) hsb_poll();
-		int argc = 0;
-		char *p = strtok(line, " ");
-		while (p && argc < 12) { argv[argc++] = p; p = strtok(NULL, " "); }
-		if (argc == 0) continue;
-		if (!clock_free(argv[0]) && !cmac_clk_ok()) {
-			xil_printf("CMAC user clock not running (GT down): only fec, loop, link, st, rd, wr\r\n");
-			continue;
-		}
-		if (!eng_ok && cmac_clk_ok()) {
-			if (eng_probe() == 0) { eng_ok = 1; loop_setup(12); }
-		}
+}
+
+/* one command line (modified in place: tokenised); returns 0, or non-zero when a test failed
+ * (the self-test verdict for 't', the single tests' results) */
+int console_exec(char *line)
+{
+	char *argv[12];
+	int argc = 0, rc = 0;
+	char *p = strtok(line, " \t\r\n");
+	while (p && argc < 12) { argv[argc++] = p; p = strtok(NULL, " \t\r\n"); }
+	if (argc == 0) return 0;
+	if (!clock_free(argv[0]) && !mac_clk_ok()) {
+		xil_printf("%s user clock not running (GT down): only fec, loop, link, st, rd, wr\r\n", MAC_NAME);
+		return 0;
+	}
+	if (!g_eng_ok && mac_clk_ok()) {
+		if (eng_probe() == 0) { g_eng_ok = 1; loop_setup(12); pause_apply(); }
+	}
+	{
 		int rec = -1;
 		for (int i = 0; i < argc; i++) if (!strcmp(argv[i], "RLH") || !strcmp(argv[i], "RLHM")) { rec = i; break; }
 		const char *c = argv[0];
 		/* the tests re-configure every QP for the loopback: forget the host peers (type, port) */
-		static const char *const tests[] = { "t", "arp", "wrq", "read", "icrc", "cnpvlan", "access", "write", "tput",
-						     "lat", "inj", "soak" };
-		for (unsigned k = 0; k < sizeof(tests) / sizeof(tests[0]); k++)
-			if (!strcmp(c, tests[k])) { memset(peer, 0, sizeof(peer)); hsb_tests_begin(); }
+		if (console_is_test(c)) { memset(peer, 0, sizeof(peer)); hsb_tests_begin(); }
 		if (rec >= 0 && !strcmp(argv[rec], "RLH")) rlh(argv, argc, rec + 1);
 		else if (rec >= 0) rlhm(argv, argc, rec + 1);
-		else if (!strcmp(c, "st")) { if (cmac_clk_ok() && eng_ok) status(); else cmac_status(); }
+		else if (!strcmp(c, "st")) { if (mac_clk_ok() && g_eng_ok) status(); else mac_status(); }
 		else if (!strcmp(c, "dump")) { eng_dump(); sys_dump(); }
 		else if (!strcmp(c, "clr")) { eng_clear(); xil_printf("ok counters cleared\r\n"); }
 		else if (!strcmp(c, "t")) {
@@ -492,7 +542,7 @@ int main(void)
 			}
 			int old = g_loop;
 			if (lp >= 0 && lp != g_loop) { g_loop = lp; relink(); }
-			selftest(!full);
+			rc = selftest(!full) != 0;
 			if (g_loop != old) { g_loop = old; relink(); }
 		}
 		else if (!strcmp(c, "fec")) { g_fec = arg_u(argv, argc, 1, 1) != 0; relink(); }
@@ -564,25 +614,25 @@ int main(void)
 			loop_setup((int)arg_u(argv, argc, 1, 12));
 			xil_printf("ok loopback setup\r\n");
 		}
-		else if (!strcmp(c, "arp")) t_arp();
-		else if (!strcmp(c, "wrq")) t_wrq();
-		else if (!strcmp(c, "read")) t_read(arg_u(argv, argc, 1, 4096), (int)arg_u(argv, argc, 2, 12));
-		else if (!strcmp(c, "icrc")) t_icrc();
-		else if (!strcmp(c, "cnpvlan")) t_cnp_vlan();
-		else if (!strcmp(c, "access")) t_access();
+		else if (!strcmp(c, "arp")) rc = t_arp() != 0;
+		else if (!strcmp(c, "wrq")) rc = t_wrq() != 0;
+		else if (!strcmp(c, "read")) rc = t_read(arg_u(argv, argc, 1, 4096), (int)arg_u(argv, argc, 2, 12)) != 0;
+		else if (!strcmp(c, "icrc")) rc = t_icrc() != 0;
+		else if (!strcmp(c, "cnpvlan")) rc = t_cnp_vlan() != 0;
+		else if (!strcmp(c, "access")) rc = t_access() != 0;
 		else if (!strcmp(c, "write"))
-			t_write(arg_u(argv, argc, 1, 4096), (int)arg_u(argv, argc, 2, 12), arg_u(argv, argc, 3, 1000),
-				argc > 4 ? parse_op(argv[4]) : OP_WRITE);
+			rc = t_write(arg_u(argv, argc, 1, 4096), (int)arg_u(argv, argc, 2, 12), arg_u(argv, argc, 3, 1000),
+				argc > 4 ? parse_op(argv[4]) : OP_WRITE) != 0;
 		else if (!strcmp(c, "tput"))
-			t_tput(arg_u(argv, argc, 1, 4096), (int)arg_u(argv, argc, 2, 12), arg_u(argv, argc, 3, 1000),
-			       (int)arg_u(argv, argc, 4, 1));
-		else if (!strcmp(c, "lat")) t_lat(arg_u(argv, argc, 1, 100), arg_u(argv, argc, 2, 1024), (int)arg_u(argv, argc, 3, 10));
+			rc = t_tput(arg_u(argv, argc, 1, 4096), (int)arg_u(argv, argc, 2, 12), arg_u(argv, argc, 3, 1000),
+			       (int)arg_u(argv, argc, 4, 1)) != 0;
+		else if (!strcmp(c, "lat")) rc = t_lat(arg_u(argv, argc, 1, 100), arg_u(argv, argc, 2, 1024), (int)arg_u(argv, argc, 3, 10)) != 0;
 		else if (!strcmp(c, "inj"))
-			t_inject((int)arg_u(argv, argc, 1, 0), (int)arg_u(argv, argc, 2, 1), (int)arg_u(argv, argc, 3, 1),
+			rc = t_inject((int)arg_u(argv, argc, 1, 0), (int)arg_u(argv, argc, 2, 1), (int)arg_u(argv, argc, 3, 1),
 				 arg_u(argv, argc, 4, 50), arg_u(argv, argc, 5, 1), arg_u(argv, argc, 6, 2000),
-				 arg_u(argv, argc, 7, 4096), (int)arg_u(argv, argc, 8, 12));
+				 arg_u(argv, argc, 7, 4096), (int)arg_u(argv, argc, 8, 12)) != 0;
 		else if (!strcmp(c, "soak"))
-			t_soak(arg_u(argv, argc, 1, 60), arg_u(argv, argc, 2, 4096), (int)arg_u(argv, argc, 3, 12), arg_u(argv, argc, 4, 0));
+			rc = t_soak(arg_u(argv, argc, 1, 60), arg_u(argv, argc, 2, 4096), (int)arg_u(argv, argc, 3, 12), arg_u(argv, argc, 4, 0)) != 0;
 		else if (!strcmp(c, "injoff")) { inj_off(); xil_printf("ok injectors off\r\n"); }
 		else if (!strcmp(c, "injset")) injset_cmd(argv, argc);
 		else if (!strcmp(c, "lp")) lp_cmd(argv, argc);
@@ -621,6 +671,49 @@ int main(void)
 			for (u32 k = 0; k < n && k < 64; k++) xil_printf("0x%05x: 0x%08x\r\n", a + 4 * k, mem_rd(a + 4 * k));
 		}
 		else if (!strcmp(c, "poke")) { mem_wr(arg_u(argv, argc, 1, 0), arg_u(argv, argc, 2, 0)); xil_printf("ok\r\n"); }
+#if defined(HAS_DDR_WIN)
+		else if (!strcmp(c, "ddr")) {
+			/* ddr                 region, counters and the first words (CPU view after for_cpu)
+			 * ddr fill [off] [n]  pattern(offset) into the buffer, then for_dev (host reader, mr=3)
+			 * ddr check [off] [n] compare with pattern(offset) after a host WRITE (mr=3)
+			 * n defaults to the whole buffer (standalone 1 MB, Linux the 256 MB carve-out) */
+			u32 nb = plat_ddr_bytes();
+			u32 off = arg_u(argv, argc, 2, 0) & ~63u, n = arg_u(argv, argc, 3, nb) & ~63u;
+			if (off > nb) off = nb;
+			if (off + n > nb || off + n < off) n = nb - off;
+			if (!nb) xil_printf("no PS DDR window buffer\r\n");
+			else if (argc > 1 && !strcmp(argv[1], "fill")) {
+				u8 pb[64];
+				for (u32 o = 0; o < n; o += 64) { pat_beat(off + o, PAT_SEED, pb); plat_ddr_put64(off + o, pb); }
+				plat_ddr_for_dev(off, n);
+				xil_printf("ok PS DDR window 0x%x..0x%x = pattern(offset), seed 0x%x\r\n", off, off + n, PAT_SEED);
+			} else if (argc > 1 && !strcmp(argv[1], "check")) {
+				u8 pb[64], db[64];
+				u32 bad = 0, first = 0xFFFFFFFFu;
+				plat_ddr_for_cpu(off, n);
+				for (u32 o = 0; o < n; o += 64) {
+					pat_beat(off + o, PAT_SEED, pb);
+					plat_ddr_get64(off + o, db);
+					if (memcmp(pb, db, 64)) { bad++; if (first == 0xFFFFFFFFu) first = off + o; }
+				}
+				xil_printf("PS DDR window 0x%x..0x%x: %u of %u beats differ from pattern(offset)", off, off + n, bad, n / 64);
+				if (bad) xil_printf(", first at 0x%x", first);
+				xil_printf("\r\n");
+				if (bad) rc = 1;
+			} else {
+				u8 db[64];
+				plat_ddr_for_cpu(0, 256);
+				plat_ddr_get64(0, db);
+				xil_printf("PS DDR region PA 0x%08x%08x size 0x%x (MR 3 rkey 0x%x) | DDR bursts wr %u rd %u outside %u\r\n",
+					   (u32)(plat_ddr_pa() >> 32), (u32)plat_ddr_pa(), nb, RKEY_DDR, cnt(RSYS_E_DDR_WR_BURSTS),
+					   cnt(RSYS_E_DDR_RD_BURSTS), cnt(RSYS_E_DDR_OOR));
+				for (int k = 0; k < 8; k++)
+					xil_printf(" %08x", (u32)db[4 * k] | ((u32)db[4 * k + 1] << 8) | ((u32)db[4 * k + 2] << 16) |
+						   ((u32)db[4 * k + 3] << 24));
+				xil_printf("\r\n");
+			}
+		}
+#endif
 		else if (!strcmp(c, "fill")) {
 			u32 a = arg_u(argv, argc, 1, 0) & ~63u, n = arg_u(argv, argc, 2, 1u << ENG.mem_log2);
 			if (a + n > (1u << ENG.mem_log2)) n = (1u << ENG.mem_log2) - a;
@@ -634,5 +727,22 @@ int main(void)
 		else if (!strcmp(c, "wr")) { Xil_Out32(arg_u(argv, argc, 1, 0), arg_u(argv, argc, 2, 0)); xil_printf("ok\r\n"); }
 		else help();
 	}
+	return rc;
+}
+
+#if !defined(PLAT_LINUX)
+/* standalone: the UART console; the HSB control plane is served between characters */
+int main(void)
+{
+	char line[128];
+
+	console_init();
+	for (;;) {
+		xil_printf("rl> ");
+		while (!getline_poll(line, sizeof(line)))
+			if (g_eng_ok && hsb_on() && mac_clk_ok() && !plat_rx_ready()) hsb_poll();
+		console_exec(line);
+	}
 	return 0;
 }
+#endif

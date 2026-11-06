@@ -1,0 +1,79 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: MIT  Copyright (c) 2026 Opsero Electronic Design Inc. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>rocelet console</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1 id="title">rocelet</h1>
+  <span id="sub">qsfp28-fmc-rocelet: RoCE v2 engine on QSFP28 port 0</span>
+  <span id="state" class="pill">connecting</span>
+</header>
+<div id="warn" class="warn" hidden>No access token is set: anybody on this network can control the design
+  (set <code>token</code> in /etc/rocelet/rocelet-web.conf).</div>
+<div id="tokenbox" class="warn" hidden>Access token: <input id="token" type="password" size="24">
+  <button id="tokenset">Use</button></div>
+
+<main>
+<section class="tiles">
+  <div class="tile"><h2>Link</h2><div id="t_link" class="big">-</div><div id="t_link2" class="small"></div></div>
+  <div class="tile"><h2>rl0</h2><div id="t_net" class="big">-</div><div id="t_net2" class="small"></div></div>
+  <div class="tile"><h2>Engine</h2><div id="t_eng" class="big">-</div><div id="t_eng2" class="small"></div></div>
+  <div class="tile"><h2>Throughput</h2><div id="t_rate" class="big">-</div><div id="t_rate2" class="small"></div></div>
+  <div class="tile"><h2>HSB</h2><div id="t_hsb" class="big">-</div><div id="t_hsb2" class="small"></div></div>
+  <div class="tile"><h2>Self-test</h2><div id="t_test" class="big">not run</div><div id="t_test2" class="small"></div></div>
+</section>
+
+<section class="panel">
+  <h2>Counters</h2>
+  <table id="counters"><thead><tr><th>counter</th><th>value</th><th>per second</th></tr></thead><tbody></tbody></table>
+</section>
+
+<section class="panel">
+  <h2>Queue pairs</h2>
+  <div id="qps" class="qps"></div>
+  <div class="row">
+    <label>QP <input id="qpn" type="number" min="0" max="15" value="0"></label>
+    <button id="qpshow">Show the FPGA record (RLF / RLFM)</button>
+  </div>
+  <textarea id="rlh" rows="3" placeholder="Paste the host's RLH (and RLHM) lines from rocelet_host here"></textarea>
+  <div class="row"><button id="rlhsend">Apply the host record</button></div>
+</section>
+
+<section class="panel">
+  <h2>Holoscan Sensor Bridge</h2>
+  <div class="row">
+    <button data-cmd="hsb on">HSB on</button>
+    <button data-cmd="hsb off">HSB off</button>
+    <label>source <select id="hsbsrc"><option>iq</option><option>count</option><option>beam</option></select></label>
+    <button id="hsbsrcset">Set</button>
+    <label>rate Mb/s <input id="hsbrate" type="number" min="0" value="1000"></label>
+    <button id="hsbrateset">Set</button>
+    <label>scene <select id="hsbscene"><option>1</option><option>2</option><option>3</option><option>4</option></select></label>
+    <button id="hsbsceneset">Set</button>
+  </div>
+</section>
+
+<section class="panel">
+  <h2>Actions</h2>
+  <div class="row">
+    <button id="selftest">Run the self-test (t pma)</button>
+    <button data-cmd="clr">Clear counters</button>
+    <button data-cmd="link">Relink</button>
+    <span class="small">text: </span>
+    <button data-text="st">st</button><button data-text="net">net</button><button data-text="hsb">hsb st</button>
+    <button data-text="ddr">ddr</button><button data-text="dump">dump</button><button data-text="log">log</button>
+  </div>
+  <div class="row"><input id="cmdline" type="text" placeholder="any console command (rl help)" size="60">
+    <button id="cmdrun">Run</button></div>
+  <pre id="out"></pre>
+</section>
+</main>
+<footer>roceletd console over /run/rocelet/roceletd.sock - the same commands as <code>rl</code> on the board</footer>
+<script src="app.js"></script>
+</body>
+</html>

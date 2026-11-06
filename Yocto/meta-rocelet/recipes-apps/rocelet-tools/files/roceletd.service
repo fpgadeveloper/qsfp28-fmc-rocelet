@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Opsero Electronic Design Inc.
+[Unit]
+Description=qsfp28-fmc-rocelet control plane (roceletd: Si5328, MAC, rocelet engine, console, HSB)
+After=systemd-modules-load.service systemd-udev-settle.service systemd-networkd.service
+Wants=systemd-udev-settle.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/roceletd-start
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

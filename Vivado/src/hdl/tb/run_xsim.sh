@@ -8,6 +8,10 @@
 # IQ16 source state). The beam reference (beam_reset.hex) is written by beam_vectors.py (python3 +
 # numpy) into the build directory. Build directory:
 # Vivado/src/hdl/tb/build/ (git-ignored). Prints the FAIL lines and the verdict.
+# MAC_WIDTH=64 (or 256) in the environment runs the same tests through a narrow MAC (rocelet's
+# width converters at rocelet_sys's MAC ports, as on the ZCU106); build directory build_w<N>.
+# ZU=1 adds the ZynqMP options (PS DDR window, netdev DMA channel) and their tests (ddr, odma);
+# the PS DDR window then has two ports per direction (rsys_axi_ilv, as on the ZCU106); DDRP=1 for one.
 #
 # Copyright (c) 2026 Opsero Electronic Design Inc.
 if ! command -v xvlog >/dev/null 2>&1; then
@@ -28,13 +32,14 @@ while read -r f; do
 done < "$RL/rtl/rocelet.f"
 SYS=("$HDL/rsys_pkg.sv")
 for f in "$HDL"/*.sv; do [ "$f" != "$HDL/rsys_pkg.sv" ] && SYS+=("$f"); done
-B="$HERE/build"
+MW="${MAC_WIDTH:-512}"; ZU="${ZU:-0}"; DDRP="${DDRP:-2}"
+B="$HERE/build"; [ "$MW" != 512 ] && B="$HERE/build_w$MW"; [ "$ZU" != 0 ] && B="${B}_zu"; [ "$ZU" != 0 ] && [ "$DDRP" != 2 ] && B="${B}$DDRP"
 mkdir -p "$B"
 python3 "$HERE/beam_vectors.py" "$B" --t 32 > /dev/null
 cd "$B"
 xvlog --sv "${ENG[@]}" "${SYS[@]}" "$HERE/tb_rocelet_sys.sv" > xvlog.log 2>&1 || { grep -E "ERROR" xvlog.log | head -30; exit 1; }
 xvlog "$XILINX_VIVADO/data/verilog/src/glbl.v" > xvlog_v.log 2>&1 || { grep -E "ERROR" xvlog_v.log | head; exit 1; }
-xelab -debug off --timescale 1ns/1ps -L xpm -L unisims_ver tb_rocelet_sys glbl -s snap > xelab.log 2>&1 || { grep -E "ERROR" xelab.log | head -30; exit 1; }
+xelab -debug off --timescale 1ns/1ps -L xpm -L unisims_ver -generic_top "MAC_WIDTH=$MW" -generic_top "ZU=$ZU" -generic_top "DDR_PORTS=$DDRP" tb_rocelet_sys glbl -s snap > xelab.log 2>&1 || { grep -E "ERROR" xelab.log | head -30; exit 1; }
 PA=(-testplusarg "test=$TEST" -testplusarg "vdir=$B")
 for a in "$@"; do PA+=(-testplusarg "${a#+}"); done
 xsim snap -R "${PA[@]}" > "xsim_$TEST.log" 2>&1 || true

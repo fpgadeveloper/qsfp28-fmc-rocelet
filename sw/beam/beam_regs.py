@@ -146,6 +146,15 @@ class BoardRegs:
         except RegError:
             return None
 
+    def link_gbps(self):
+        """OPS_LINK_GBPS (0x7F000018): the board's link rate in Gb/s (100 KCU116, 40 ZCU106); None when the
+        console predates the register (reads 0) or does not answer."""
+        try:
+            v = self.read([bs.OPS_LINK_GBPS])[0]
+        except Exception:                     # RegError, or a module-API read error: treated as unknown
+            return None
+        return v if 0 < v <= 1000 else None
+
     def close(self):
         if self.sock is not None:
             self.sock.close()

@@ -22,8 +22,12 @@ module tb_rocelet_sys
 #(
     parameter int  NUM_QP   = 16,
     parameter int  RTX_MODE = 0,
-    parameter int  LOOP_LAT = 120      // clocks through the CMAC + loopback model
+    parameter int  LOOP_LAT = 120,     // clocks through the MAC + loopback model
+    parameter int  MAC_WIDTH = 512,    // 512 (KCU116 CMAC) or 64 / 256 (ZCU106 omac): MAC_WIDTH=64 run_xsim.sh
+    parameter int  ZU = 0,             // 1: the ZynqMP options (PS DDR window, netdev DMA channel): ZU=1 run_xsim.sh
+    parameter int  DDR_PORTS = 2       // ZU: PS DDR masters per direction (2 = address-interleaved, the ZCU106): DDRP=1 run_xsim.sh
 );
+localparam int MB = MAC_WIDTH / 8;
 
 logic clk = 1'b0;
 always #1.5515 clk = ~clk;
@@ -40,21 +44,22 @@ wire  logic [31:0] rdata;
 wire  logic [1:0]  bresp, rresp;
 
 // CMAC model
-wire  logic [511:0] tx_tdata;
-wire  logic [63:0]  tx_tkeep;
+wire  logic [MAC_WIDTH-1:0] tx_tdata;
+wire  logic [MB-1:0]  tx_tkeep;
 wire  logic         tx_tvalid, tx_tlast, tx_tuser;
 logic               tx_tready = 1'b0;
-logic [511:0] rx_tdata = '0;
-logic [63:0]  rx_tkeep = '0;
+logic [MAC_WIDTH-1:0] rx_tdata = '0;
+logic [MB-1:0]  rx_tkeep = '0;
 logic         rx_tvalid = 1'b0, rx_tlast = 1'b0, rx_tuser = 1'b0;
-wire  logic [8:0] pz_tx_req;
+wire  logic [31:0] mac_ctl;
+wire  logic       pz_tx_req = mac_ctl[16];
 wire  logic       irq;
 
 rocelet_sys #(
     .NUM_QP(NUM_QP), .NUM_MR(16), .READ_DEPTH(16), .RTX_MODE(RTX_MODE), .RING_BYTES(262144), .MAX_WR(128),
-    .SELFTEST(1'b1), .MEM_BYTES(262144)
+    .SELFTEST(1'b1), .MEM_BYTES(262144), .MAC_WIDTH(MAC_WIDTH), .DDR_EN(ZU != 0), .DDR_PORTS(DDR_PORTS), .ODMA_EN(ZU != 0)
 ) dut (
-    .clk(clk), .gen_clk(gen_clk), .sys_rst(sys_rst), .mac_tx_rst(1'b0), .mac_rx_rst(1'b0), .irq(irq),
+    .clk(clk), .gen_clk(gen_clk), .sys_rst(sys_rst), .irq(irq), .evt(),
     .s_axil_awaddr(awaddr), .s_axil_awvalid(awvalid), .s_axil_awready(awready),
     .s_axil_wdata(wdata), .s_axil_wstrb(4'hF), .s_axil_wvalid(wvalid), .s_axil_wready(wready),
     .s_axil_bresp(bresp), .s_axil_bvalid(bvalid), .s_axil_bready(bready),
@@ -63,18 +68,132 @@ rocelet_sys #(
     .rx_tdata(rx_tdata), .rx_tkeep(rx_tkeep), .rx_tvalid(rx_tvalid), .rx_tlast(rx_tlast), .rx_tuser(rx_tuser),
     .tx_tdata(tx_tdata), .tx_tkeep(tx_tkeep), .tx_tvalid(tx_tvalid), .tx_tready(tx_tready),
     .tx_tlast(tx_tlast), .tx_tuser(tx_tuser),
-    .pause_rx_req('0), .pause_rx_valid('0), .pause_rx_quanta8('0), .pause_rx_frame(1'b0),
-    .pause_tx_frame(1'b0), .pause_tx_req(pz_tx_req),
-    .ctl_rx_enable(), .ctl_tx_enable(), .ctl_tx_send_rfi(), .ctl_tx_send_lfi(), .ctl_tx_send_idle(),
-    .ctl_rsfec(), .ctl_rx_pause(), .ctl_rx_pause_vec(), .ctl_tx_pause_vec(), .ctl_tx_pause_quanta(),
-    .ctl_tx_pause_refresh(), .ctl_gt_loopback(),
-    .stat_rx_aligned(1'b1), .stat_rx_status(1'b1), .stat_rx_local_fault(1'b0), .stat_rx_remote_fault(1'b0),
-    .stat_rx_received_local_fault(1'b0), .stat_rx_internal_local_fault(1'b0), .stat_rx_hi_ber(1'b0),
-    .stat_rx_misaligned(1'b0), .stat_rx_rsfec_hi_ser(1'b0), .stat_rx_rsfec_lane_alignment_status(1'b1),
-    .stat_rx_total_packets('0), .stat_rx_bad_fcs('0), .stat_rx_bad_code('0),
-    .stat_rx_rsfec_corrected_cw_inc(1'b0), .stat_rx_rsfec_uncorrected_cw_inc(1'b0),
-    .stat_tx_total_packets(1'b0), .stat_tx_bad_fcs(1'b0), .tx_unfout(1'b0)
+    .mac_ctl(mac_ctl), .mac_pz(), .mac_addr(),
+    .mac_stat(16'h1203), .mac_ev('0), .mac_pause('0),     // aligned, RX status, FEC lanes aligned, link up
+    .m_axi_ddrw_awid(d_awid[0]), .m_axi_ddrw_awaddr(d_awaddr[0]), .m_axi_ddrw_awlen(d_awlen[0]), .m_axi_ddrw_awsize(),
+    .m_axi_ddrw_awburst(), .m_axi_ddrw_awcache(), .m_axi_ddrw_awprot(), .m_axi_ddrw_awvalid(d_awvalid[0]),
+    .m_axi_ddrw_awready(d_awready[0]), .m_axi_ddrw_wdata(d_wdata[0]), .m_axi_ddrw_wstrb(d_wstrb[0]), .m_axi_ddrw_wlast(d_wlast[0]),
+    .m_axi_ddrw_wvalid(d_wvalid[0]), .m_axi_ddrw_wready(d_wready[0]), .m_axi_ddrw_bid(d_bid[0]), .m_axi_ddrw_bresp(2'b00),
+    .m_axi_ddrw_bvalid(d_bvalid[0]), .m_axi_ddrw_bready(d_bready[0]),
+    .m_axi_ddrr_arid(d_arid[0]), .m_axi_ddrr_araddr(d_araddr[0]), .m_axi_ddrr_arlen(d_arlen[0]), .m_axi_ddrr_arsize(),
+    .m_axi_ddrr_arburst(), .m_axi_ddrr_arcache(), .m_axi_ddrr_arprot(), .m_axi_ddrr_arvalid(d_arvalid[0]),
+    .m_axi_ddrr_arready(d_arready[0]), .m_axi_ddrr_rid(d_rid[0]), .m_axi_ddrr_rdata(d_rdata[0]), .m_axi_ddrr_rresp(2'b00),
+    .m_axi_ddrr_rlast(d_rlast[0]), .m_axi_ddrr_rvalid(d_rvalid[0]), .m_axi_ddrr_rready(d_rready[0]),
+    .m_axi_ddrw1_awid(d_awid[1]), .m_axi_ddrw1_awaddr(d_awaddr[1]), .m_axi_ddrw1_awlen(d_awlen[1]), .m_axi_ddrw1_awsize(),
+    .m_axi_ddrw1_awburst(), .m_axi_ddrw1_awcache(), .m_axi_ddrw1_awprot(), .m_axi_ddrw1_awvalid(d_awvalid[1]),
+    .m_axi_ddrw1_awready(d_awready[1]), .m_axi_ddrw1_wdata(d_wdata[1]), .m_axi_ddrw1_wstrb(d_wstrb[1]), .m_axi_ddrw1_wlast(d_wlast[1]),
+    .m_axi_ddrw1_wvalid(d_wvalid[1]), .m_axi_ddrw1_wready(d_wready[1]), .m_axi_ddrw1_bid(d_bid[1]), .m_axi_ddrw1_bresp(2'b00),
+    .m_axi_ddrw1_bvalid(d_bvalid[1]), .m_axi_ddrw1_bready(d_bready[1]),
+    .m_axi_ddrr1_arid(d_arid[1]), .m_axi_ddrr1_araddr(d_araddr[1]), .m_axi_ddrr1_arlen(d_arlen[1]), .m_axi_ddrr1_arsize(),
+    .m_axi_ddrr1_arburst(), .m_axi_ddrr1_arcache(), .m_axi_ddrr1_arprot(), .m_axi_ddrr1_arvalid(d_arvalid[1]),
+    .m_axi_ddrr1_arready(d_arready[1]), .m_axi_ddrr1_rid(d_rid[1]), .m_axi_ddrr1_rdata(d_rdata[1]), .m_axi_ddrr1_rresp(2'b00),
+    .m_axi_ddrr1_rlast(d_rlast[1]), .m_axi_ddrr1_rvalid(d_rvalid[1]), .m_axi_ddrr1_rready(d_rready[1]),
+    .dma_clk(dma_clk), .m_axis_orx_tdata(o_tdata), .m_axis_orx_tkeep(o_tkeep), .m_axis_orx_tvalid(o_tvalid),
+    .m_axis_orx_tready(1'b1), .m_axis_orx_tlast(o_tlast), .s_axis_otx_tdata(t_tdata), .s_axis_otx_tkeep(t_tkeep),
+    .s_axis_otx_tvalid(t_tvalid), .s_axis_otx_tready(t_tready), .s_axis_otx_tlast(t_tlast)
 );
+
+// ---------------- PS DDR model (ZU): two ports per direction, 64-byte beats ----------------
+// One memory behind both ports (ddrm, by 64-byte beat). Each port answers in order with random
+// ready gaps and read latencies (port 1 slower), so the two ports finish out of order and
+// rsys_axi_ilv must restore the request order. With DDR_PORTS 2 every burst is checked: ID 0, on
+// the port of its address (bit 9), inside one 512-byte granule (ddr_viol); ddr_sub[p] counts them.
+logic dma_clk = 1'b0;                  // 250 MHz netdev DMA channel clock
+always #2.0 dma_clk = ~dma_clk;
+wire  logic [1:0]   d_awid [2], d_arid [2];
+wire  logic [39:0]  d_awaddr [2], d_araddr [2];
+wire  logic [7:0]   d_awlen [2], d_arlen [2];
+wire  logic         d_awvalid [2], d_wlast [2], d_wvalid [2], d_bready [2], d_arvalid [2], d_rready [2];
+wire  logic [511:0] d_wdata [2];
+wire  logic [63:0]  d_wstrb [2];
+logic [1:0]   d_bid [2], d_rid [2];
+logic         d_bvalid [2], d_rvalid [2], d_rlast [2], d_awready [2], d_wready [2], d_arready [2];
+logic [511:0] d_rdata [2];
+logic [511:0] ddrm [longint];
+longint       ddr_wbytes = 0;
+int           ddr_viol = 0;
+int           ddr_sub [2] = '{0, 0};
+longint       dcyc = 0;
+always @(posedge clk) dcyc <= dcyc + 1;
+for (genvar p = 0; p < 2; p++) begin : g_dport
+    logic [39:0]  aw_qa [$], ar_qa [$];
+    logic [1:0]   aw_qi [$], ar_qi [$], b_qi [$];
+    int           aw_ql [$], ar_ql [$];
+    longint       ar_qt [$];
+    int           dwbeat = 0, drbeat = 0;
+    initial begin
+        d_bid[p] = '0; d_rid[p] = '0; d_bvalid[p] = 1'b0; d_rvalid[p] = 1'b0; d_rlast[p] = 1'b0; d_rdata[p] = '0;
+        d_awready[p] = 1'b1; d_wready[p] = 1'b1; d_arready[p] = 1'b1;
+    end
+    always @(posedge clk) begin
+        if (d_awvalid[p] && d_awready[p]) begin
+            aw_qa.push_back(d_awaddr[p]); aw_qi.push_back(d_awid[p]); aw_ql.push_back(int'(d_awlen[p]));
+            if (DDR_PORTS == 2) begin
+                ddr_sub[p]++;
+                if (d_awid[p] != 0 || d_awaddr[p][9] != p || (d_awaddr[p][8:6] + d_awlen[p]) > 7) begin
+                    ddr_viol++;
+                    if (ddr_viol < 5) $display("FAIL PS DDR port %0d AW id %0d addr %h len %0d", p, d_awid[p], d_awaddr[p], d_awlen[p]);
+                end
+            end
+        end
+        if (d_wvalid[p] && d_wready[p]) begin
+            automatic longint k = (aw_qa[0] >> 6) + dwbeat;
+            automatic logic [511:0] old = ddrm.exists(k) ? ddrm[k] : '0;
+            for (int b = 0; b < 64; b++) if (d_wstrb[p][b]) begin old[b*8 +: 8] = d_wdata[p][b*8 +: 8]; ddr_wbytes++; end
+            ddrm[k] = old;
+            if (d_wlast[p] != (dwbeat == aw_ql[0])) begin
+                ddr_viol++;
+                if (ddr_viol < 5) $display("FAIL PS DDR port %0d WLAST at beat %0d of %0d", p, dwbeat, aw_ql[0] + 1);
+            end
+            dwbeat++;
+            if (d_wlast[p]) begin dwbeat = 0; void'(aw_qa.pop_front()); void'(aw_ql.pop_front()); b_qi.push_back(aw_qi.pop_front()); end
+        end
+        if (d_bvalid[p] && d_bready[p]) d_bvalid[p] <= 1'b0;
+        if ((!d_bvalid[p] || d_bready[p]) && b_qi.size() > 0 && $urandom_range(0, 3) != 0) begin
+            d_bvalid[p] <= 1'b1; d_bid[p] <= b_qi.pop_front();
+        end
+        if (d_arvalid[p] && d_arready[p]) begin
+            ar_qa.push_back(d_araddr[p]); ar_qi.push_back(d_arid[p]); ar_ql.push_back(int'(d_arlen[p]));
+            ar_qt.push_back(dcyc + $urandom_range(4, p ? 60 : 20));
+            if (DDR_PORTS == 2) begin
+                ddr_sub[p]++;
+                if (d_arid[p] != 0 || d_araddr[p][9] != p || (d_araddr[p][8:6] + d_arlen[p]) > 7) begin
+                    ddr_viol++;
+                    if (ddr_viol < 5) $display("FAIL PS DDR port %0d AR id %0d addr %h len %0d", p, d_arid[p], d_araddr[p], d_arlen[p]);
+                end
+            end
+        end
+        // random ready gaps (ZU tests only; harmless elsewhere)
+        d_awready[p] <= $urandom_range(0, 3) != 0;
+        d_wready[p]  <= $urandom_range(0, 4) != 0;
+        d_arready[p] <= $urandom_range(0, 3) != 0;
+        if (!d_rvalid[p] || d_rready[p]) begin
+            d_rvalid[p] <= 1'b0;
+            if (ar_qa.size() > 0 && ar_qt[0] <= dcyc && $urandom_range(0, 4) != 0) begin
+                automatic longint k = (ar_qa[0] >> 6) + drbeat;
+                d_rvalid[p] <= 1'b1; d_rid[p] <= ar_qi[0]; d_rdata[p] <= ddrm.exists(k) ? ddrm[k] : '0;
+                d_rlast[p] <= (drbeat == ar_ql[0]);
+                if (drbeat == ar_ql[0]) begin
+                    drbeat = 0; void'(ar_qa.pop_front()); void'(ar_qi.pop_front()); void'(ar_ql.pop_front()); void'(ar_qt.pop_front());
+                end else drbeat++;
+            end
+        end
+    end
+end
+
+// ---------------- netdev DMA channel model (ZU): S2MM capture, MM2S source ----------------
+wire  logic [511:0] o_tdata;
+wire  logic [63:0]  o_tkeep;
+wire  logic         o_tvalid, o_tlast, t_tready;
+logic [511:0] t_tdata = '0;
+logic [63:0]  t_tkeep = '0;
+logic         t_tvalid = 1'b0, t_tlast = 1'b0;
+logic [7:0]   orx_buf [0:16383];
+int           orx_n = 0, orx_frames = 0, orx_len [$];
+always @(posedge dma_clk) if (o_tvalid) begin
+    for (int b = 0; b < 64; b++) if (o_tkeep[b]) begin orx_buf[orx_n % 16384] = o_tdata[b*8 +: 8]; orx_n++; end
+    if (o_tlast) begin orx_frames++; orx_len.push_back(orx_n); end
+end
 
 // TX accepts 5 of 8 clocks (0.625 beats/clock ~ 103 Gb/s at 322 MHz), or random
 logic [2:0]  duty = '0;
@@ -84,10 +203,10 @@ initial rnd_ready = $test$plusargs("rndready");
 always_ff @(posedge clk) begin
     duty <= duty + 3'd1;
     trng <= {trng[30:0], trng[31] ^ trng[21] ^ trng[1] ^ trng[0]};
-    tx_tready <= rnd_ready ? (trng[3:0] > 4'd6) : (duty < 3'd5);
+    tx_tready <= rnd_ready ? (trng[3:0] > 4'd6) : (MAC_WIDTH < 512 || duty < 3'd5);
 end
 // loopback delay line
-typedef struct packed { logic v; logic l; logic [63:0] k; logic [511:0] d; } beat_t;
+typedef struct packed { logic v; logic l; logic [MB-1:0] k; logic [MAC_WIDTH-1:0] d; } beat_t;
 beat_t line [LOOP_LAT];
 initial for (int i = 0; i < LOOP_LAT; i++) line[i] = '0;
 always_ff @(posedge clk) begin
@@ -282,7 +401,10 @@ task automatic t_inject(input bit rx, input int action, input int cls, input int
     cnt(E_WC, v); expect_eq("work completions", v, n);
     cnt(E_WC_ERR, v); expect_eq("completion errors", v, 0);
     cnt(E_WC_MISM, v); expect_eq("mismatch", v, 0);
-    bcr(B_WC_BYTES, b); expect_eq("write bytes (zero loss)", b, n * 4096);
+    // at 100G every lost packet is resent exactly once; through a narrow MAC (8x slower link) the
+    // go-back-N window is longer and a duplicate WRITE may be re-executed (same data, same address)
+    if (MAC_WIDTH == 512) begin bcr(B_WC_BYTES, b); expect_eq("write bytes (zero loss)", b, n * 4096); end
+    else begin bcr(B_WC_BYTES, b); expect_ge("write bytes (zero loss, duplicates allowed)", b, n * 4096); end
     if (cls & 1) begin er(R_CNT_REQ_RTX, v); expect_ge("recoveries", v, 1); end
     cfgw(C_INJ_CTRL, 0); cfgw(C_RINJ_CTRL, 0);
 endtask
@@ -354,15 +476,18 @@ task automatic raw_send(input int n);
     cfgw(C_RAW_SEND, 1);
 endtask
 
-task automatic t_read(input int pmtu, input int len);
+task automatic t_read(input int pmtu, input int len, input logic [31:0] rkey = 32'h2001,
+                      input logic [63:0] va = 64'h8000, input bit fill = 1);
     logic [31:0] v, st, w, ic, sum;
     logic [511:0] pb;
     int clen, npk, mm;
-    $display("==== READ len %0d pmtu %0d (host QP raw request)", len, 1 << pmtu);
+    $display("==== READ len %0d pmtu %0d R_Key %h VA %h (host QP raw request)", len, 1 << pmtu, rkey, va);
     setup(pmtu);
-    for (int o = 0; o < len; o += 4) begin
-        if (o % 64 == 0) pb = pat_beat(64'h8000 + o, SEED);
-        wr32(MEM + 19'(32'h8000 + o), pb[(o % 64) * 8 +: 32]);
+    if (fill) begin
+        for (int o = 0; o < len; o += 4) begin
+            if (o % 64 == 0) pb = pat_beat(64'h8000 + o, SEED);
+            wr32(MEM + 19'(32'h8000 + o), pb[(o % 64) * 8 +: 32]);
+        end
     end
     npk = (len + (1 << pmtu) - 1) >> pmtu;
     cfgw(C_CAP_MATCH, (32'h50 << 8) | (npk == 1 ? 32'h10 : 32'h0D));
@@ -379,8 +504,8 @@ task automatic t_read(input int pmtu, input int len);
     {rf[34], rf[35]} = 16'hC0DE; {rf[36], rf[37]} = 16'd4791; {rf[38], rf[39]} = 16'd40;
     rf[42] = 8'h0C; rf[43] = 8'h40; rf[44] = 8'hFF; rf[45] = 8'hFF; {rf[47], rf[48], rf[49]} = QB + NUM_QP - 1;
     {rf[51], rf[52], rf[53]} = 24'h400000;
-    for (int i = 0; i < 8; i++) rf[54 + i] = 8'(64'h8000 >> ((7-i)*8));
-    {rf[62], rf[63], rf[64], rf[65]} = 32'h2001; {rf[66], rf[67], rf[68], rf[69]} = len;
+    for (int i = 0; i < 8; i++) rf[54 + i] = 8'(va >> ((7-i)*8));
+    {rf[62], rf[63], rf[64], rf[65]} = rkey; {rf[66], rf[67], rf[68], rf[69]} = len;
     ic = icrc_of(rf, 70);
     {rf[73], rf[72], rf[71], rf[70]} = ic;
     raw_send(74);
@@ -402,7 +527,7 @@ task automatic t_read(input int pmtu, input int len);
     expect_eq("ICRC of the capture", {cf[clen-1], cf[clen-2], cf[clen-3], cf[clen-4]}, icrc_of(cf, clen - 4));
     mm = 0;
     for (int i = 0; i < ((npk == 1) ? len : (1 << pmtu)); i++) begin
-        if (i % 64 == 0) pb = pat_beat(64'h8000 + i, SEED);
+        if (i % 64 == 0) pb = pat_beat(va + i, SEED);
         if (cf[58 + i] != pb[(i % 64) * 8 +: 8]) mm++;
     end
     expect_eq("READ payload vs memory", mm, 0);
@@ -613,7 +738,7 @@ logic [7:0] cur [0:8191];
 int         cur_n = 0;
 always @(posedge clk) begin
     if (mon_en && tx_tvalid && tx_tready) begin
-        for (int b = 0; b < 64; b++) if (tx_tkeep[b] && cur_n < 8192) begin cur[cur_n] = tx_tdata[8*b +: 8]; cur_n++; end
+        for (int b = 0; b < MB; b++) if (tx_tkeep[b] && cur_n < 8192) begin cur[cur_n] = tx_tdata[8*b +: 8]; cur_n++; end
         if (tx_tlast) begin
             if (cur_n > 70 && {cur[34], cur[35]} == 16'd12288) begin
                 mfs.push_back(mpos); mfl.push_back(cur_n);
@@ -706,7 +831,7 @@ task automatic hsb_run(input int src, input int frame, input int wrmax, input in
         do begin repeat (322) @(posedge clk); svr(S_HP_FRAMES, v); t++; end while (v < nframes && t < 3000);
     end
     wait_idle(500);
-    repeat (322 * 2) @(posedge clk);
+    repeat (322 * 2 * (512 / MAC_WIDTH)) @(posedge clk);   // the narrow link drains 8x slower
     svr(S_TIME_NS, ts1);
     mon_en = 0;
     cfgw(C_HP_CTRL, 0);
@@ -825,6 +950,104 @@ task automatic t_hsb();
     expect_eq("device DNA = simulation value", {d2, d1, d0} == 96'h0123_4567_89AB_CDEF_0F1E_2D3C, 1);
 endtask
 
+// ---------------- ZynqMP options: PS DDR window, netdev DMA channel ----------------
+task automatic otx_send(input int n);       // rf[0..n-1] as one frame from the PS
+    for (int o = 0; o < n; o += 64) begin
+        @(posedge dma_clk);
+        t_tvalid <= 1'b1; t_tlast <= (o + 64 >= n);
+        for (int b = 0; b < 64; b++) begin t_tdata[b*8 +: 8] <= (o + b < n) ? rf[o + b] : 8'h00; t_tkeep[b] <= (o + b < n); end
+        do @(posedge dma_clk); while (!t_tready);
+        t_tvalid <= 1'b0;
+    end
+endtask
+
+localparam logic [63:0] DDR_LA = (64'd1 << 39) | 64'h0010_0000;   // DDR window offset 0x10_0000
+localparam logic [39:0] DDR_BASE = 40'h00_7000_0000;              // region base: PA = base + offset
+task automatic t_ddr();
+    logic [31:0] v;
+    int mm = 0;
+    $display("==== PS DDR window: WRITE into PS DDR (local address bit 39), READ it back");
+    setup(12);
+    cfgw(C_DDR_BASE_LO, DDR_BASE[31:0]); cfgw(C_DDR_BASE_HI, DDR_BASE[39:32]);
+    cfgw(C_DDR_SIZE, 32'h0020_0000);                     // 2 MB region: offsets 0 .. 0x1F_FFFF
+    mr(3, 32'h4003, 64'h0010_0000, 32'h0040_0000, DDR_LA, 3'b111);
+    ddr_wbytes = 0;
+    run_wg(0, 0, 64'h0010_0000, 65536, 4096, 32'h4003, 16);
+    wait_idle(5000);
+    cnt(E_WC, v); expect_eq("work completions", v, 16);
+    cnt(E_WC_ERR, v); expect_eq("completion errors", v, 0);
+    cnt(E_DDR_WR_BURSTS, v); expect_ge("DDR write bursts", v, 16);
+    cnt(E_MEM_WR_BURSTS, v); expect_eq("URAM write bursts", v, 0);
+    expect_eq("bytes written into PS DDR", ddr_wbytes, 65536);
+    for (longint a = 64'h10_0000; a < 64'h11_0000; a += 64)
+        if (!ddrm.exists((a + DDR_BASE) >> 6) || ddrm[(a + DDR_BASE) >> 6] != pat_beat(a, SEED)) mm++;
+    expect_eq("PS DDR beats (at base + offset) != pattern(VA)", mm, 0);
+    // outside the region (offset 0x20_0000 and up): null target, nothing reaches PS DDR
+    setup(12);
+    cfgw(C_DDR_BASE_LO, DDR_BASE[31:0]); cfgw(C_DDR_BASE_HI, DDR_BASE[39:32]); cfgw(C_DDR_SIZE, 32'h0020_0000);
+    mr(3, 32'h4003, 64'h0010_0000, 32'h0040_0000, DDR_LA, 3'b111);
+    ddr_wbytes = 0;
+    run_wg(0, 0, 64'h0030_0000, 65536, 4096, 32'h4003, 4);
+    wait_idle(5000);
+    cnt(E_WC, v); expect_eq("work completions (outside the region)", v, 4);
+    cnt(E_WC_ERR, v); expect_eq("completion errors (outside the region)", v, 0);
+    cnt(E_DDR_OOR, v); expect_ge("null-target bursts", v, 4);
+    expect_eq("bytes written into PS DDR (outside the region)", ddr_wbytes, 0);
+    t_read(12, 4096, 32'h4003, 64'h0010_0000, 0);
+    t_read(10, 8192, 32'h4003, 64'h0010_2000, 0);
+    cnt(E_DDR_RD_BURSTS, v); expect_ge("DDR read bursts", v, 2);
+    // a READ that starts inside a 512-byte granule and crosses several (both ports, re-merged)
+    t_read(12, 4096, 32'h4003, 64'h0010_01C0, 0);
+    t_read(12, 3000, 32'h4003, 64'h0010_6040, 0);
+    if (DDR_PORTS == 2) begin
+        $display("  PS DDR sub-bursts on port 0 / 1: %0d / %0d", ddr_sub[0], ddr_sub[1]);
+        expect_ge("PS DDR sub-bursts on port 0", ddr_sub[0], 16);
+        expect_ge("PS DDR sub-bursts on port 1", ddr_sub[1], 16);
+        expect_eq("PS DDR port rule violations (ID, port, granule, WLAST)", ddr_viol, 0);
+    end
+endtask
+
+task automatic t_odma();
+    logic [31:0] v, d0;
+    int f0, mm;
+    $display("==== netdev DMA channel: other-traffic frames to the PS, frames from the PS, drop");
+    setup(12);
+    ew(R_CTRL, 32'h1AAE | 32'h100);                       // OTHER_RX_EN
+    cfgw(C_ODMA_CTRL, 1);
+    cnt(E_ODMA_DROP, d0);
+    f0 = orx_frames;
+    // a UDP frame (not RoCE) from the raw buffer loops back into the other-traffic port
+    udp_frame(MYMAC, MYIP, 16'd50000, 16'd5000, 200, 5); raw_send(200);
+    repeat (322 * 6) @(posedge clk);
+    expect_eq("frames at the S2MM stream", orx_frames - f0, 1);
+    if (orx_frames - f0 == 1) begin
+        int st = orx_len[orx_len.size() - 1] - 200;
+        mm = 0; for (int i = 0; i < 200; i++) if (orx_buf[(st + i) % 16384] != rf[i]) mm++;
+        expect_eq("frame length", orx_len[orx_len.size() - 1] - (orx_len.size() > 1 ? orx_len[orx_len.size() - 2] : 0), 200);
+        expect_eq("frame bytes", mm, 0);
+    end
+    // a 1514-byte frame from the PS (MM2S): engine TX -> loopback -> back to the PS
+    udp_frame(MYMAC, MYIP, 16'd50001, 16'd5001, 1514, 9);
+    otx_send(1514);
+    repeat (322 * 10) @(posedge clk);
+    expect_eq("frames at the S2MM stream (looped back)", orx_frames - f0, 2);
+    if (orx_frames - f0 == 2) begin
+        int st = orx_len[orx_len.size() - 1] - 1514;
+        mm = 0; for (int i = 0; i < 1514; i++) if (orx_buf[(st + i) % 16384] != rf[i]) mm++;
+        expect_eq("looped frame bytes", mm, 0);
+    end
+    cnt(E_ODMA_RX, v); expect_eq("E_ODMA_RX", v, 2);
+    cnt(E_ODMA_TX, v); expect_eq("E_ODMA_TX", v, 1);
+    // disabled: dropped and counted, never stalls the engine
+    cfgw(C_ODMA_CTRL, 0);
+    udp_frame(MYMAC, MYIP, 16'd50002, 16'd5002, 100, 11); raw_send(100);
+    repeat (322 * 4) @(posedge clk);
+    cnt(E_ODMA_DROP, v); expect_eq("E_ODMA_DROP (disabled)", v - d0, 1);
+    expect_eq("no frame at the S2MM stream while disabled", orx_frames - f0, 2);
+    t_arp();                                               // the engine still answers ARP
+    ew(R_CTRL, 32'h1AAE);
+endtask
+
 // debug probe (+iqdbg)
 initial if ($test$plusargs("iqdbg")) forever begin
     #2000;
@@ -877,6 +1100,8 @@ initial begin
     if (test == "all" || test == "access") t_access();
     if (test == "all" || test == "crx")    t_crx();
     if (test == "all" || test == "hsb")    t_hsb();
+    if (ZU != 0 && (test == "all" || test == "ddr"))  t_ddr();
+    if (ZU != 0 && (test == "all" || test == "odma")) t_odma();
     if (test == "hsbiq") hsb_run(0, 8192, 4096, 12, 4, 5, 16'd50002);
     if (test == "hsbbm") t_hsb_beam();
     $display("==== DONE errors=%0d", errors);

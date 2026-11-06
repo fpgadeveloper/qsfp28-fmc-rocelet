@@ -17,16 +17,53 @@ regenerates the content that is *not* read at runtime:
 The Sphinx documentation also refers to the data.json file when compiling the target design
 and supported board tables.
 
-Usage (from this directory):  python3 update.py
+Usage (from the repository root):  python3 config/update.py
+
+MAC options. A target whose entry lists "mac_options" can be built with any of those MACs
+under the same label (zcu106: omac_40g = the shipping 40GBASE-R4 configuration, omac_10g =
+the 10GBASE-R option). The MAC is the target's "mac" attribute; the attributes that follow
+from it (link_gbps, mac_width, linkspeed, lanes) are set together from the MAC table below:
+
+  python3 config/update.py --mac zcu106=omac_10g     # the 10G option: data.json rewritten + regenerated
+  python3 config/update.py --mac zcu106=omac_40g     # back to the shipping configuration
+
+then build as usual (./build.sh all --target zcu106). Only the Vivado / Vitis / Yocto outputs of
+that label change; a Vivado project of the other MAC is rebuilt from scratch.
 '''
 
 import os
+import sys
 import json
+import argparse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 def rel(path):
     return os.path.normpath(os.path.join(HERE, path))
+
+# MAC table: the attributes of a target that follow from its MAC ("mac"), for --mac
+MAC_ATTRS = {
+    "cmac":     {"link_gbps": 100, "mac_width": 512, "linkspeed": "100", "lanes": [0]},
+    "omac_10g": {"link_gbps": 10,  "mac_width": 64,  "linkspeed": "10",  "lanes": [0]},
+    "omac_40g": {"link_gbps": 40,  "mac_width": 256, "linkspeed": "40",  "lanes": [0]},
+}
+
+# --mac <label>=<mac>: select one of a target's "mac_options" in data.json
+def select_mac(data, spec):
+    if '=' not in spec:
+        sys.exit("ERROR: --mac expects <label>=<mac>, e.g. zcu106=omac_10g")
+    label, mac = spec.split('=', 1)
+    for design in data['designs']:
+        if design['label'] != label:
+            continue
+        opts = design.get('mac_options', [design.get('mac', 'cmac')])
+        if mac not in opts:
+            sys.exit("ERROR: target {} has the MAC options {}, not {}".format(label, ', '.join(opts), mac))
+        design['mac'] = mac
+        design.update(MAC_ATTRS[mac])
+        print("{}: MAC {} ({} Gb/s, MAC_WIDTH {})".format(label, mac, design['link_gbps'], design['mac_width']))
+        return True
+    sys.exit("ERROR: no target {} in data.json".format(label))
 
 # Load the JSON data
 def load_json(filename):
@@ -57,7 +94,7 @@ def create_tables(data):
     for group in used_groups:
         tables.append('### {} designs'.format(group['name']))
         tables.append('')
-        tables.append('| Target board          | Target design      | Ports       | FEC         | FMC Slot(s) | Standalone<br> console | Built-in<br> self-test | Vivado<br> Edition |')
+        tables.append('| Target board          | Target design      | Ports       | FEC         | FMC Slot(s) | Standalone<br> console | Linux<br> (Yocto) | Vivado<br> Edition |')
         tables.append('|-----------------------|--------------------|-------------|-------------|-------------|-------|-------|-------|')
         for design in data['designs']:
             if not design['publish']:
@@ -66,12 +103,15 @@ def create_tables(data):
                 cols = []
                 cols.append('[{0}]'.format(design['board']).ljust(21))
                 cols.append('`{0}`'.format(design['label']).ljust(18))
-                ports = '{}x 100G'.format(design['ports'])
+                ports = '{}x {}G'.format(design['ports'], design.get('linkspeed', '100'))
+                others = [m for m in design.get('mac_options', []) if m != design.get('mac')]
+                if others:
+                    ports += ' ({} option)'.format(', '.join('{}G'.format(MAC_ATTRS[m]['link_gbps']) for m in others))
                 cols.append('{0}'.format(ports).ljust(11))
                 cols.append('{0}'.format(to_fec[design.get('fec', 'none')]).ljust(11))
                 cols.append('{0}'.format(design['connector']).ljust(11))
                 cols.append('{0}'.format(to_emoji[design['baremetal']]).ljust(5))
-                cols.append('{0}'.format(to_emoji[design.get('selftest', False)]).ljust(5))
+                cols.append('{0}'.format(to_emoji[design.get('yocto', False)]).ljust(5))
                 cols.append('{0}'.format(to_edition[design['license']]).ljust(5))
                 tables.append('| ' + ' | '.join(cols) + ' |')
                 links[design['board']] = design['link']
@@ -110,12 +150,38 @@ def update_readme(file_path,data):
                 outfile.write(line)
 
 # One line per target for Vivado/scripts/build.tcl:
-#   dict set target_dict <label> { <url> <boardname> <bdscript> <port> <fec> <selftest> { <engine parameters> } }
+#   dict set target_dict <label> { <url> <boardname> <bdscript> <port> <fec> <selftest> { <rocelet_sys parameters> } <mac> { <GT placement> } }
 # build.tcl uses <bdscript> to pick src/bd/bd_<bdscript>.tcl and passes the
 # QSFP28 port (the first entry of "lanes"), the FEC mode ("rs" or "none"), the
 # self-test option (1 = include the pattern source/sink, checkers and fault
 # injectors) and the rocelet_sys parameters: the engine's ("engine": {NAME:
-# value}) and the memory window size ("mem_bytes" -> MEM_BYTES) to it.
+# value}), the memory window size ("mem_bytes" -> MEM_BYTES), the MAC side
+# ("mac_width" -> MAC_WIDTH, "clk_khz" -> CLK_KHZ and CLK_MHZ, "clk_hz" -> CLK_HZ,
+# "link_gbps" -> LINK_GBPS) and the ZynqMP options ("ddr_window" -> DDR_EN,
+# "ddr_ports" -> DDR_PORTS: 1 or 2 HP ports per direction, "netdev_dma" -> ODMA_EN) to it, plus the MAC type ("mac": cmac | omac_10g | omac_40g), which
+# selects the MAC adapter sources (Vivado/src/hdl/mac) and, for omac, the MAC IP.
+# The GT placement of the QSFP28 port ({ channels {..} refclk clkN } or { channels {..}
+# cmac_core CMACE4_XnYm }) comes from "gt_channels" (the transceiver channel sites in QSFP
+# lane order 0-3, e.g. X0Y14: omac_10g uses lane 0, omac_40g and cmac all four of one quad),
+# "gt_refclk" (omac: the reference clock of the lane 0 channel as the gtwizard IP names it,
+# clk0 / clk1 = MGTREFCLK0 / 1 of its quad, clk0+1 / clk0-1 ... = one of the quad above /
+# below) and "cmac_core" (cmac: the CMAC hard block site); build.tcl checks them.
+def gt_placement(design):
+    mac = design.get('mac', 'cmac')
+    chans = design.get('gt_channels', [])
+    need = 1 if mac == 'omac_10g' else 4
+    if len(chans) < need or (need == 4 and len(chans) != 4):
+        sys.exit("ERROR: target {} (mac {}) needs {} gt_channels in data.json, has {}".format(
+            design['label'], mac, 'four' if need == 4 else 'at least one', len(chans)))
+    gt = 'channels {{{}}}'.format(' '.join(chans))
+    if mac == 'cmac':
+        if 'cmac_core' not in design:
+            sys.exit("ERROR: target {} (mac cmac) needs cmac_core in data.json".format(design['label']))
+        gt += ' cmac_core {}'.format(design['cmac_core'])
+    else:
+        gt += ' refclk {}'.format(design.get('gt_refclk', 'clk0'))
+    return gt
+
 def get_vivado_build_targets(data):
     targets = []
     for design in data['designs']:
@@ -123,10 +189,25 @@ def get_vivado_build_targets(data):
         params = dict(design.get('engine', {}))
         if 'mem_bytes' in design:
             params['MEM_BYTES'] = design['mem_bytes']
+        if 'mac_width' in design:
+            params['MAC_WIDTH'] = design['mac_width']
+        if 'clk_khz' in design:
+            params['CLK_MHZ'] = int(round(design['clk_khz'] / 1000.0))
+            params['CLK_KHZ'] = design['clk_khz']
+            params['CLK_HZ'] = design.get('clk_hz', design['clk_khz'] * 1000)
+        if 'link_gbps' in design:
+            params['LINK_GBPS'] = design['link_gbps']
+        if design.get('ddr_window', False):
+            params['DDR_EN'] = 1
+        if design.get('ddr_window', False) and 'ddr_ports' in design:
+            params['DDR_PORTS'] = design['ddr_ports']
+        if design.get('netdev_dma', False):
+            params['ODMA_EN'] = 1
         eng = ' '.join('{} {}'.format(k, v) for k, v in params.items())
-        target = 'dict set target_dict {} {{ {} {} {} {} {} {} {{ {} }} }}'.format(
+        target = 'dict set target_dict {} {{ {} {} {} {} {} {} {{ {} }} {} {{ {} }} }}'.format(
             design['label'], design['url'], design['boardname'], design['bdscript'], port,
-            design.get('fec', 'none'), 1 if design.get('selftest', False) else 0, eng)
+            design.get('fec', 'none'), 1 if design.get('selftest', False) else 0, eng,
+            design.get('mac', 'cmac'), gt_placement(design))
         targets.append(target)
     return(targets)
 
@@ -189,8 +270,17 @@ def check_sources(data):
                 print('WARNING: No Yocto port-config overlay found at Yocto/bsp/port-configs/{} for target'.format(portcfg),design['label'])
 
 if __name__ == '__main__':
+    ap = argparse.ArgumentParser(description='Regenerate README tables, build.tcl targets and .gitignore from data.json')
+    ap.add_argument('--mac', action='append', default=[], metavar='LABEL=MAC',
+                    help="select one of a target's mac_options (rewrites data.json), e.g. zcu106=omac_10g")
+    args = ap.parse_args()
     # Read the JSON data
     data = load_json(rel('data.json'))
+    if args.mac:
+        for spec in args.mac:
+            select_mac(data, spec)
+        with open(rel('data.json'), 'w') as f:
+            f.write(json.dumps(data, indent=2) + '\n')
 
     # Update the main README.md file
     update_readme(rel('../README.md'),data)

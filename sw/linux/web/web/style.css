@@ -1,0 +1,40 @@
+/* SPDX-License-Identifier: MIT  Copyright (c) 2026 Opsero Electronic Design Inc. */
+:root { --bg: #f6f7f9; --fg: #1b1f24; --mut: #5b6470; --card: #ffffff; --line: #d9dde3; --ok: #1a7f37;
+        --bad: #c62828; --acc: #2457c5; --warnbg: #fff4d6; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #15181c; --fg: #e6e9ed; --mut: #9aa4b0; --card: #1e2227; --line: #333a42; --ok: #4cc46a;
+          --bad: #ef6b6b; --acc: #7aa2ff; --warnbg: #3a3218; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.4 system-ui, sans-serif; }
+header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 12px; padding: 12px 16px;
+         border-bottom: 1px solid var(--line); background: var(--card); }
+header h1 { margin: 0; font-size: 20px; }
+#sub { color: var(--mut); }
+.pill { margin-left: auto; padding: 2px 10px; border-radius: 10px; border: 1px solid var(--line); }
+.pill.ok { color: var(--ok); border-color: var(--ok); } .pill.bad { color: var(--bad); border-color: var(--bad); }
+main { padding: 12px 16px; max-width: 1200px; }
+.warn { margin: 8px 16px; padding: 8px 12px; background: var(--warnbg); border-radius: 6px; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; }
+.tile, .panel { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
+.panel { margin-top: 12px; }
+h2 { margin: 0 0 6px; font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--mut); }
+.big { font-size: 18px; font-weight: 600; } .small { color: var(--mut); font-size: 12px; overflow-wrap: anywhere; }
+.up { color: var(--ok); } .down { color: var(--bad); }
+table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: 3px 8px; border-bottom: 1px solid var(--line); }
+td:nth-child(n+2), th:nth-child(n+2) { text-align: right; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 6px 0; }
+button { padding: 4px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg);
+         cursor: pointer; } button:hover { border-color: var(--acc); }
+input, select, textarea { background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 4px;
+                          padding: 3px 6px; font: inherit; }
+textarea { width: 100%; font-family: ui-monospace, monospace; }
+input[type=number] { width: 6em; }
+pre { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 8px; overflow: auto;
+      max-height: 480px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
+.qps { display: flex; flex-wrap: wrap; gap: 6px; }
+.qp { padding: 2px 8px; border-radius: 4px; border: 1px solid var(--line); font-size: 12px; }
+.qp.v { border-color: var(--ok); } .qp.e { border-color: var(--bad); color: var(--bad); }
+footer { padding: 12px 16px; color: var(--mut); font-size: 12px; }
+@media (max-width: 600px) { #cmdline { width: 100%; } }

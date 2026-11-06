@@ -130,12 +130,11 @@ int si5328_init(UINTPTR iic_base, int plan)
 	/* Full device reset first (RST_ALL, reg 136 bit 7), as the Linux
 	 * clk-si5324 driver does: makes programming deterministic regardless
 	 * of prior state (e.g. JTAG re-runs without a power cycle). */
+	/* The device resets while it receives this byte, so the master may see the final ACK
+	 * missing (Linux i2c-xiic reports -EIO; the reset still happens: verified on the ZCU106
+	 * 2026-11-04, reg 2 back at its default). A missing device fails the next write. */
 	buf[0] = 136; buf[1] = 0x80;
-	sent = XIic_Send(iic_base, SI5328_ADDR, buf, 2, XIIC_STOP);
-	if (sent != 2) {
-		xil_printf("si5328: device reset write failed (sent %u)\r\n", sent);
-		return -1;
-	}
+	(void)XIic_Send(iic_base, SI5328_ADDR, buf, 2, XIIC_STOP);
 	usleep(20000);
 	buf[0] = 136; buf[1] = 0x00;
 	sent = XIic_Send(iic_base, SI5328_ADDR, buf, 2, XIIC_STOP);

@@ -14,22 +14,26 @@
 `timescale 1ns / 1ps
 `default_nettype none
 
-module rsys_ptime (
+module rsys_ptime #(
+    parameter longint CLK_HZ = 322265625   // clk frequency (the MAC user clock)
+) (
     input  wire logic         clk,
     input  wire logic         rst,
     output logic [47:0]       t_s,
     output logic [29:0]       t_ns
 );
 
-localparam logic [28:0] CYC_MAX = 29'd322265624;        // clocks per second - 1
-localparam logic [25:0] K24     = 26'd52060210;         // round(2^24 x 1e9 / 322265625)
+localparam logic [28:0] CYC_MAX = 29'(CLK_HZ - 1);      // clocks per second - 1
+// round(2^24 x 1e9 / CLK_HZ): 52060210 at 322265625 Hz, 107374182 at 156250000 Hz
+localparam longint      K24_L   = ((64'd1 << 24) * 64'd1000000000 + CLK_HZ / 2) / CLK_HZ;
+localparam logic [27:0] K24     = 28'(K24_L);
 
 logic [28:0] cyc = '0;
 logic [47:0] sec = '0;
 logic [28:0] c1 = '0;
 logic [47:0] s1 = '0, s2 = '0, s3 = '0;
-(* use_dsp = "yes" *) logic [54:0] m2 = '0;
-logic [54:0] m3 = '0;
+(* use_dsp = "yes" *) logic [56:0] m2 = '0;
+logic [56:0] m3 = '0;
 
 always_ff @(posedge clk) begin
     if (cyc == CYC_MAX) begin

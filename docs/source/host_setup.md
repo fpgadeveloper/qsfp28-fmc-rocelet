@@ -2,7 +2,8 @@
 
 This page takes a PC from a bare install to the [beamforming demo](beam_demo.md) running on a
 monitor: the hardware the host needs, the operating system and drivers, Docker and NVIDIA's
-Holoscan Sensor Bridge (HSB) container, the 100G port that faces the board, the display session
+Holoscan Sensor Bridge (HSB) container, the port that faces the board (100G for the KCU116, 40G
+for the ZCU106), the display session
 for the window, and the order in which board and host are started. The board side (build,
 programming, console) is in [](getting_started.md).
 
@@ -138,12 +139,13 @@ docker run --rm --gpus all --runtime=nvidia hololink-demo:3.0.0 nvidia-smi
 docker run --rm hololink-demo:3.0.0 pip3 show holoscan-cu13 hololink cupy-cuda13x | grep -E '^(Name|Version)'
 ```
 
-## 4. The 100G port
+## 4. The port that faces the board
 
 ![The rear of the test host: the AOC in port 1 of the ConnectX-6 Dx, the monitor on the GPU's DisplayPort through a DP-to-HDMI adapter](images/setup-p520-rear.jpg)
 
-The FPGA's 100G MAC does not auto-negotiate, so the host port runs with fixed settings. Use an
-isolated point-to-point link: never put the 100G port on a LAN or behind a router.
+The FPGA's MACs do not auto-negotiate, so the host port runs with fixed settings, at the speed
+of the board's target. Use an isolated point-to-point link: never put this port on a LAN or
+behind a router. The table gives the KCU116 (100G) values; the ZCU106 differences follow it.
 
 | Setting | Value | Command (runtime) |
 |---|---|---|
@@ -152,6 +154,23 @@ isolated point-to-point link: never put the 100G port on a LAN or behind a route
 | MTU | 4200, for an RDMA path MTU of 4096 | `sudo ip link set dev <if> mtu 4200` |
 | Address | 192.168.20.1/24 (the FPGA is 192.168.20.2 by default) | `sudo ip addr add 192.168.20.1/24 dev <if>` |
 | Neighbour entry, link pause | leave them alone: no static neighbour entry is needed, link pause stays at the NIC's default | |
+
+**ZCU106 (40G).** The ZCU106 target's link is 40GBASE-CR4 without FEC (the omac_40g MAC has no
+FEC and no auto-negotiation):
+
+| Setting | Value | Command (runtime) |
+|---|---|---|
+| Speed | 40G, full duplex, auto-negotiation off | `sudo ethtool -s <if> speed 40000 duplex full autoneg off` |
+| FEC | **off** (40GBASE-R4 has no RS-FEC; a ConnectX-6 Dx left at `Auto` may pick a FEC mode the board does not speak) | `sudo ethtool --set-fec <if> encoding off` |
+| 10G option | the same with `speed 10000` (the ConnectX-6 Dx uses QSFP lane 0, which is the lane the 10G option uses) | `sudo ethtool -s <if> speed 10000 duplex full autoneg off` |
+| MTU, address | as above (4200, 192.168.20.1/24) | |
+| Link pause | on (the NIC's default): the ZCU106 console sends 802.3x PAUSE frames when its receive FIFO fills, and the ConnectX-6 Dx honours them | `ethtool -a <if>` shows RX / TX on |
+
+The NIC must support 40GBASE-CR4 (the ConnectX-6 Dx does, and 10GBASE-CR for the 10G option).
+The 3 m QSFP28 DAC of the test host is rated for 40G and 10G as well as 100G; a QSFP+ 40G DAC
+works too. For the persistent `.link` drop-in below use `BitsPerSecond=40G`; FEC has no `.link`
+setting, so set it with `ethtool --set-fec` from a systemd unit or a NetworkManager dispatcher
+script after the port comes up.
 
 **Persistent configuration.** The test host (Ubuntu with systemd-networkd) uses a netplan file
 for the address and the MTU, and a systemd `.link` drop-in for the speed. The netplan file,
@@ -221,7 +240,13 @@ file as above works with `renderer: NetworkManager` under `ethernets:`.
 | host | `ping -c 3 192.168.20.2` | replies (the FPGA answers ARP and ICMP echo) |
 | board console | power-up banner, `st` | `Port 0: link up, 100 Gb/s, RS-FEC on`; `st` shows the link and the engine's counters |
 
-The ConnectX-6 Dx's carrier comes up about 2 s after the board is programmed **(test host)**.
+On the ZCU106: `ethtool <if>` shows `Speed: 40000Mb/s`, `ethtool --show-fec <if>` `Active FEC
+encoding: Off`, and on the board `rl st` (Linux) or `st` (bare metal) shows the link up at
+40 Gb/s and the lane line `block lock 1111 | AM lock 1111`. `ping 192.168.20.2` is answered by
+Linux through `rl0` on the Linux image.
+
+The ConnectX-6 Dx's carrier comes up about 2 s after the board is programmed **(test host)**;
+the ZCU106 reports its link 3-6 s after the MAC is released.
 
 ## 5. The display session
 

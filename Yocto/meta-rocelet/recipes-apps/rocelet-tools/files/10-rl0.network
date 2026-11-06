@@ -1,0 +1,16 @@
+# qsfp28-fmc-rocelet: QSFP28 port 0 (rl0) is a point-to-point RDMA link to the host NIC: a static
+# address, no DHCP, no default route, no IPv6 autoconfiguration. Never bridge it to the LAN.
+# The engine follows this address (roceletd); the host side is 192.168.20.1/24 by default.
+[Match]
+Name=rl0
+
+[Link]
+RequiredForOnline=no
+
+[Network]
+Address=192.168.20.2/24
+DHCP=no
+LinkLocalAddressing=no
+IPv6AcceptRA=no
+ConfigureWithoutCarrier=yes
+IPForward=no

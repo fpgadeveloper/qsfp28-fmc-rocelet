@@ -8,7 +8,7 @@
 # window that is also the control surface: dragging a source writes the new scene to the FPGA
 # (HSB register protocol, Opsero BM registers, APPLY) and the picture follows.
 #
-#   --source roce        the board (KCU116 + OP120, 'hsb on'): enumeration, configure_roce,
+#   --source roce        the board (KCU116 or ZCU106 + OP120, 'hsb on'): enumeration, configure_roce,
 #                        RoceReceiverOp into GPU memory, start gate, keepalive (as rocelet_hsb_app.py)
 #   --source synthetic   no board: frames from beam_model.generate_frame() (the bit-exact reference,
 #                        numpy, ~10 frames/s) for the scene the app writes into an in-process copy of
@@ -719,8 +719,7 @@ class BeamOp(Operator):
             T[layer][1].append([x / W, y / H, size])
 
         r = self.rate
-        src_name = {"roce": "KCU116 -> 100G RoCE -> GPU", "synthetic": "synthetic (bit-exact model) -> GPU",
-                    "csynthetic": "synthetic (CUDA model) -> GPU"}[c.source]
+        src_name = source_label(c, " -> GPU")
         txt("title", 28, 8, f"8 x 8 PHASED-ARRAY RECEIVER     {src_name}", ui_mod.TS_TITLE)
         txt("label", 28, 56, "L-drag emitter  R-drag jammer  wheel amplitude  M-click lock beam  1-5 presets  "
                              "B beamformer  C calibrate  N noise  A attract  R reset  -/+ rate  Esc quit",
@@ -1050,6 +1049,9 @@ def parse_args(argv=None):
     ap.add_argument("--json", default=None)
     # board (as rocelet_hsb_app.py)
     ap.add_argument("--ip", default="192.168.20.2")
+    ap.add_argument("--board", default=None,
+                    help="board name in the window header and on the page (default: from the board's OPS_LINK_GBPS: "
+                         "100 KCU116, 40 / 10 ZCU106; 'FPGA' when unknown)")
     ap.add_argument("--api", choices=["classic", "module"], default="classic")
     ap.add_argument("--module-dir", default=None)
     ap.add_argument("--reg-mode", choices=["block", "single"], default="block",
@@ -1058,7 +1060,8 @@ def parse_args(argv=None):
     ap.add_argument("--force", action="store_true", help="run even if S_BM_CAPS does not report the array generator")
     ap.add_argument("--rate", type=float, default=64.0,
                     help="board RATE_MBPS in Gb/s (frame + record) at the start; keys - / + and the page change it "
-                         f"while the stream runs ({ui_mod.RATE_MIN_GBPS:g}-{ui_mod.RATE_MAX_GBPS:g} Gb/s)")
+                         f"while the stream runs ({ui_mod.RATE_MIN_GBPS:g}-{ui_mod.RATE_MAX_GBPS:g} Gb/s, capped at "
+                         "the board's link: 40 on the ZCU106)")
     ap.add_argument("--mtu", type=int, default=4200)
     ap.add_argument("--pages", type=int, default=64)
     ap.add_argument("--queue-size", type=int, default=None)
@@ -1093,6 +1096,21 @@ def parse_args(argv=None):
     a.tag = a.tag or f"beam_{a.source}_p{a.preset}_{time.strftime('%Y%m%d_%H%M%S')}"
     a.json = a.json or os.path.join(a.outdir, a.tag + ".json")
     return a
+
+
+# the board name for the header: --board, else the target that reports this OPS_LINK_GBPS (each target has its
+# own link rate: 100 KCU116, 40 ZCU106 omac_40g, 10 its omac_10g option); a ported design passes --board
+BOARD_BY_LINK = {100: "KCU116", 40: "ZCU106", 10: "ZCU106"}
+
+
+def source_label(c, gpu=""):
+    """The window header / page source line: '<board> -> <N>G RoCE -> GPU' from the board's OPS_LINK_GBPS
+    (c.link_gbps, None when the register read failed or the console predates it: 'FPGA -> RoCE -> GPU')."""
+    if c.source != "roce":
+        return {"synthetic": "synthetic (bit-exact model)", "csynthetic": "synthetic (CUDA model)"}[c.source] + gpu
+    g = getattr(c, "link_gbps", None)
+    board = c.board or BOARD_BY_LINK.get(g, "FPGA")
+    return f"{board} -> {g}G RoCE -> GPU" if g else f"{board} -> RoCE -> GPU"
 
 
 def beam_line(b, st):
@@ -1164,6 +1182,15 @@ def main(argv=None):
             if caps != bs.CAPS_VALUE and not c.force:
                 raise RuntimeError(f"the board does not report the 8 x 8 array generator (S_BM_CAPS "
                                    f"{caps if caps is None else hex(caps)}, expected 0x{bs.CAPS_VALUE:08x}); --force runs anyway")
+            link = c.link_gbps = regs.link_gbps()
+            print(f"source: {source_label(c)}", flush=True)
+            if link:
+                ui_mod.set_rate_max(link)
+                print(f"board link {link} Gb/s: stream rate {ui_mod.RATE_MIN_GBPS:g}-{ui_mod.RATE_MAX_GBPS:g} Gb/s "
+                      f"(steps {', '.join(f'{x:g}' for x in ui_mod.RATE_STEPS)})", flush=True)
+                if c.rate > ui_mod.RATE_MAX_GBPS:
+                    print(f"--rate {c.rate:g} > the link: {ui_mod.RATE_MAX_GBPS:g} Gb/s", flush=True)
+                    c.rate = ui_mod.RATE_MAX_GBPS
             regs.write_block([(bs.OPS_SOURCE, bs.SOURCE_BEAM), (bs.OPS_RATE_MBPS, int(round(c.rate * 1000)))])
             if c.keepalive:
                 rocelet_hsb.set_keepalive(hl, c.keepalive)
@@ -1190,7 +1217,7 @@ def main(argv=None):
     if c.web:
         try:
             web = beam_web.BeamWeb(c.web, ui, bind=c.web_bind, hello=dict(
-                app="rocelet_beam_app.py", source=c.source, rate_gbps=c.rate if c.source == "roce" else None,
+                app="rocelet_beam_app.py", source=c.source, source_label=source_label(c), rate_gbps=c.rate if c.source == "roce" else None,
                 grid=WEB_G, loading=c.loading, presets=list(bs.PRESETS),
                 emitters=list(ui_mod.EMITTERS), jammers=list(ui_mod.JAMMERS))).start()
         except OSError as e:

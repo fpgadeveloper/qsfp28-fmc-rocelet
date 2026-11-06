@@ -19,11 +19,16 @@
 
 #define RSYS_NCFG               256
 #define RSYS_NSV                64
-#define RSYS_NCNT               48
+#define RSYS_NCNT               56
 #define RSYS_NBC                16
 #define RSYS_C_CTRL             0   /* [0] self-test logic reset [1] statistics clear (pulse) */
-#define RSYS_C_MAC_CTL          1   /* CMAC static control: [0] rx enable [1] tx enable [2] send RFI [3] send LFI [4] send idle [5] RS-FEC [6] receive 802.3x PAUSE [7] send 802.3x PAUSE [10:8] GT loopback (0 off, 1 near-end PCS, 2 near-end PMA) */
+#define RSYS_C_MAC_CTL          1   /* MAC static control (mac_ctl): [0] rx enable [1] tx enable [2] send RFI [3] send LFI [4] send idle [5] FEC (CMAC RS-FEC) [6] receive 802.3x PAUSE [7] send 802.3x PAUSE [10:8] GT loopback (0 off, 1 near-end PCS, 2 near-end PMA) */
 #define RSYS_C_MAC_PZ           2   /* [15:0] PAUSE quanta sent [31:16] PAUSE refresh timer (512-bit times) */
+#define RSYS_C_MAC_ADDR_LO      3   /* MAC station address (source of the MAC's PAUSE frames; omac): bytes 0-3 on the wire, byte 0 = [7:0] (reset 02:0a:35:72) */
+#define RSYS_C_MAC_ADDR_HI      4   /* [15:0] bytes 4-5 (reset 6c:01) */
+#define RSYS_C_DDR_BASE_LO      5   /* PS DDR window (DDR_EN builds): physical base of the region, [31:12] (4 KB aligned) */
+#define RSYS_C_DDR_BASE_HI      6   /* [7:0] physical base [39:32] */
+#define RSYS_C_DDR_SIZE         7   /* region size in bytes, multiple of 4 KB (reset 0 = window closed: every DDR-window access goes to the null target) */
 #define RSYS_C_WG_CTRL          8   /* self-test WR generator, write: [0] start [1] stop */
 #define RSYS_C_WG_QP            9   /* [7:0] first QP [15:8] number of QPs (round robin) */
 #define RSYS_C_WG_OP            10   /* [3:0] opcode (0 WRITE 1 WRITE+imm 2 SEND 3 SEND+imm) [4] solicited event [5] HSB metadata */
@@ -75,6 +80,7 @@
 #define RSYS_C_CRX_CTRL         80   /* control-plane receive FIFO: [0] enable [1] take every other-traffic frame (no filter) */
 #define RSYS_C_CRX_PORTS        81   /* [15:0] UDP destination port A (reset 8192) [31:16] port B (reset 12268) */
 #define RSYS_C_CRX_POP          82   /* write: free the head frame */
+#define RSYS_C_ODMA_CTRL        83   /* netdev DMA channel (ODMA_EN builds): [0] other-traffic frames to the PS (RX enable) */
 #define RSYS_C_HP_CTRL          84   /* HSB producer: [0] run (0 -> 1 latches C_HP_* except C_HP_PERIOD; 1 -> 0 stops at a frame boundary) [2:1] source 0 IQ16 1 counter 2 beam array (3 = 0) */
 #define RSYS_C_HP_QP            85   /* [7:0] QP index (type 2, UC-HSB) */
 #define RSYS_C_HP_RKEY          86   /* host R_Key (DP_RKEY) */
@@ -116,9 +122,9 @@
 #define RSYS_C_BM_APPLY         165   /* write: apply (snapshot of all C_BM_* words, active at the next frame boundary) */
 #define RSYS_C_BM_GAIN0         192   /* 192..255: element k gain [15:0] I [31:16] Q, int16 Q2.14 */
 #define RSYS_S_ID               0   /* "RSYS" */
-#define RSYS_S_SYS_CFG          1   /* [0] self-test logic built in [1] pattern region [2] payload from the stream port [15:8] log2 memory window bytes */
+#define RSYS_S_SYS_CFG          1   /* [0] self-test logic built in [1] pattern region [2] payload from the stream port [3] PS DDR window [4] netdev DMA channel [15:8] log2 memory window bytes [23:16] link Gb/s [31:24] MAC width / 8 */
 #define RSYS_S_STATUS           2   /* [0] self-test reset [1] WR generator running [2] capture done [3] latency tracker overflow [4] TX injector armed [5] RX injector armed [6] engine irq */
-#define RSYS_S_MAC_STAT         3   /* CMAC: [0] rx aligned [1] rx status [2] local fault [3] remote fault [4] received local fault [5] internal local fault [6] hi BER [7] misaligned [8] RS-FEC hi SER [9] RS-FEC lanes aligned [10] usr_rx_reset [11] usr_tx_reset */
+#define RSYS_S_MAC_STAT         3   /* MAC (mac_stat): [0] rx aligned / block lock [1] rx status [2] local fault [3] remote fault [4] received local fault [5] internal local fault [6] hi BER [7] misaligned [8] RS-FEC hi SER [9] RS-FEC lanes aligned [10] RX in reset [11] TX in reset [12] link up [13] TX PAUSE active */
 #define RSYS_S_WQ_STATUS        4   /* [8:0] queued WRs [16] queue full [17] payload pending */
 #define RSYS_S_WCQ              5   /* work completion head: [31] valid [30:24] status [23:16] qp [15:0] wr_id */
 #define RSYS_S_RCQ              6   /* receive completion head: [31] valid [30] SEND [29] with immediate [23:16] qp */
@@ -210,6 +216,12 @@
 #define RSYS_E_CRX_LONG         45   /* matching frames dropped: longer than 2 KB */
 #define RSYS_E_CRX_FILT         46   /* other-traffic frames that did not match the filter */
 #define RSYS_E_HP_FRAMES        47   /* HSB frames produced (metadata WR sent to the engine) */
+#define RSYS_E_ODMA_RX          48   /* netdev DMA channel: other-traffic frames queued for the PS */
+#define RSYS_E_ODMA_DROP        49   /* netdev DMA channel: frames dropped (RX disabled, FIFO full or longer than 10240 bytes) */
+#define RSYS_E_ODMA_TX          50   /* netdev DMA channel: frames from the PS sent */
+#define RSYS_E_DDR_WR_BURSTS    51   /* PS DDR window: AXI write bursts */
+#define RSYS_E_DDR_RD_BURSTS    52   /* PS DDR window: AXI read bursts */
+#define RSYS_E_DDR_OOR          53   /* PS DDR window: bursts outside the region (writes discarded, reads return zeros) */
 #define RSYS_B_CYCLES           0
 #define RSYS_B_WG_BYTES         1   /* bytes of the WRs issued by the self-test generator */
 #define RSYS_B_WC_BYTES         2   /* bytes written to memory (checked) */

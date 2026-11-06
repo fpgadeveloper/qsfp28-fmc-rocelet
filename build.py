@@ -980,23 +980,36 @@ def yocto_inputs(ctx: Context, files=None):
 # Beside the products, so 'clean --keep-boot' (which keeps images/) keeps it;
 # the yocto zip gathers named files only, so it is never shipped.
 YOCTO_STAMP = ".inputs-sha256"
+# Which files yocto_input_files() collects. Bump when that set grows (a new
+# kind of input), so a stamp written under an older rule is known to be
+# missing entries it never could have had; under the SAME rule, an input the
+# stamp lacks was created after the images (see yocto_freshness).
+YOCTO_INPUTS_RULE = 2
 
 
 def read_yocto_stamp(ctx: Context):
-    """The inputs recorded when the images were built, or None if no stamp."""
+    """(inputs, rule): the inputs recorded when the images were built and the
+    YOCTO_INPUTS_RULE they were collected under (0 for a stamp from before
+    the rule was recorded); (None, 0) if there is no stamp."""
     p = ctx.yocto_img / YOCTO_STAMP
     try:
         text = p.read_text(encoding="utf-8")
     except OSError:
-        return None
-    out = {}
+        return None, 0
+    out, rule = {}, 0
     for line in text.splitlines():
+        if line.startswith("# inputs-rule "):
+            try:
+                rule = int(line.split()[2])
+            except (IndexError, ValueError):
+                pass
+            continue
         if not line.strip() or line.startswith("#"):
             continue
         digest, sep, rel = line.partition("  ")
         if sep:
             out[rel] = digest
-    return out
+    return out, rule
 
 
 def write_yocto_stamp(ctx: Context, inputs, adopted=False):
@@ -1008,6 +1021,7 @@ def write_yocto_stamp(ctx: Context, inputs, adopted=False):
         with open(p, "w", encoding="utf-8", newline="\n") as f:
             f.write("# Yocto inputs these images were built from "
                     f"(sha256  path); {how}\n")
+            f.write(f"# inputs-rule {YOCTO_INPUTS_RULE}\n")
             for rel, digest in inputs.items():
                 f.write(f"{digest}  {rel}\n")
     except OSError as e:
@@ -1055,8 +1069,11 @@ def yocto_freshness(ctx: Context):
                    images -- see below); recording their hashes is the
                    decision;
       'stale'   -- rebuild: lines = 'changed  <k>' / 'removed  <k>' (hash
-                   evidence against the stamp) and 'newer    <k>' (an input
-                   the stamp does not cover, modified after the images).
+                   evidence against the stamp), 'added    <k>' (an input a
+                   stamp written under the current YOCTO_INPUTS_RULE does
+                   not cover: it did not exist when the images were built)
+                   and 'newer    <k>' (an input an older stamp does not
+                   cover, modified after the images).
     current = {key: sha256} of the current inputs (the stamp to write).
 
     Rule: the stamp's hashes decide wherever it has an entry. An input it has
@@ -1072,7 +1089,11 @@ def yocto_freshness(ctx: Context):
     is newer than the images was rewritten by a checkout/merge/pull (the
     squash merges of the dev branches post-date the images they shipped),
     which neither its mtime nor its commit date can tell apart from a real
-    change -- it is adopted ('tracked') and reported, never silently. An
+    change -- it is adopted ('tracked') and reported, never silently. That
+    mtime judgement applies only to inputs a stamp could not have recorded
+    (no stamp, or one written under an older YOCTO_INPUTS_RULE): a stamp
+    under the current rule recorded every input that existed at build time,
+    so an input it lacks is new and the images are stale ('added'). An
     absent XSA is never a change by itself ('clean' of the Vivado project
     must not force an hours-long Yocto rebuild)."""
     products = yocto_products(ctx)
@@ -1082,7 +1103,7 @@ def yocto_freshness(ctx: Context):
     root = ctx.repo.root
     paths = yocto_input_files(ctx)
     current = yocto_inputs(ctx, paths)
-    stamp = read_yocto_stamp(ctx)
+    stamp, rule = read_yocto_stamp(ctx)
     old = dict(stamp or {})
     xsa = _input_key(ctx.xsa, root)
     if xsa not in current:
@@ -1094,6 +1115,11 @@ def yocto_freshness(ctx: Context):
         elif k in old and old[k] != current[k]:
             lines.append(f"changed  {k}")
     unvouched = [k for k in current if k not in old]
+    if stamp is not None and rule >= YOCTO_INPUTS_RULE:
+        # The stamp recorded every input of its build; the XSA is the one
+        # input it may legitimately lack (absent when the stamp was adopted).
+        lines += [f"added    {k}" for k in unvouched if k != xsa]
+        unvouched = [k for k in unvouched if k == xsa]
     after = [k for k in unvouched if paths[k].stat().st_mtime > built]
     clean = _git_clean_tracked(root, [k for k in after if k != xsa])
     lines += [f"newer    {k}" for k in after if k not in clean]
@@ -1103,7 +1129,9 @@ def yocto_freshness(ctx: Context):
             lines.append(f"newer    {_input_key(hw, root)}")
     if lines:
         return "stale", lines, current
-    if stamp is None or unvouched:
+    if stamp is None or unvouched or rule < YOCTO_INPUTS_RULE:
+        # rule < current with nothing unvouched: every input is hash-verified,
+        # so the stamp is simply rewritten under the current rule.
         return "adopt", [f"{'tracked' if k in clean else 'older':<8} {k}"
                          for k in unvouched], current
     return "fresh", [], current
@@ -1145,13 +1173,16 @@ def stage_yocto(ctx: Context):
         return "skipped (images up to date)"
     if state == "adopt":
         tracked = [l for l in lines if l.startswith("tracked")]
-        if read_yocto_stamp(ctx) is None:
+        if read_yocto_stamp(ctx)[0] is None:
             print(f"  The images have no freshness stamp (built before "
                   f"build.py recorded one); adopting the current "
                   f"{len(lines)} inputs as what they were built from.")
-        else:
+        elif lines:
             print(f"  Adding {len(lines)} input(s) the stamp did not cover "
                   f"to the stamp.")
+        else:
+            print("  Every input is hash-verified; rewriting the stamp under "
+                  f"inputs-rule {YOCTO_INPUTS_RULE}.")
         if tracked:
             print(f"  {len(tracked)} of them are git-tracked, unmodified "
                   f"files with mtimes after the images (a checkout/merge "
@@ -1164,9 +1195,10 @@ def stage_yocto(ctx: Context):
                   f"built, force a rebuild: {shim_name()} clean --target "
                   f"{ctx.target} --stage yocto, then {shim_name()} yocto "
                   f"--target {ctx.target}")
-        else:
+        elif lines:
             print("  Every one of them is older than the images.")
-        write_yocto_stamp(ctx, current, adopted=True)
+        # No lines = a rule upgrade of a fully hash-verified stamp.
+        write_yocto_stamp(ctx, current, adopted=bool(lines))
         return "skipped (images up to date)"
     if state == "stale":
         print(f"  Yocto inputs changed since the images were built "
@@ -1207,10 +1239,17 @@ def stage_yocto(ctx: Context):
     if not hw_xsa.is_file() or hw_xsa.stat().st_mtime < ctx.xsa.stat().st_mtime:
         hw_xsa.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ctx.xsa, hw_xsa)
-    # 3. Configure (sdtgen + gen-machineconf parse-sdt + BSP/overlay/sstate).
-    #    Re-run when the XSA, the board conf or the extra-layers list (both read
-    #    only at configure time) is newer than the done-marker. See
-    #    yocto_bsp_dir() for which bsp dir a target uses.
+    # 3. Configure. Two depths, both via configure-build.sh:
+    #    'full' (sdtgen + gen-machineconf parse-sdt + BSP/overlay/sstate)
+    #    when there is no done-marker or the XSA is newer than it -- the SDT
+    #    and the generated MACHINE derive from the XSA alone; 'conf' (only
+    #    bblayers.conf + the local.conf block re-appended) when the board
+    #    conf, the extra-layers list or offline.txt is newer. A full
+    #    reconfigure regenerates the SDT, which re-runs the device-tree,
+    #    firmware and boot-image tasks (~900 tasks) even when nothing in it
+    #    changed, so a conf edit -- a comment included -- must not cause one;
+    #    bitbake hashes the conf's variable values itself. See yocto_bsp_dir()
+    #    for which bsp dir a target uses.
     bsp = yocto_bsp_dir(ctx)
     board = bsp.name
     conf_append = bsp / "conf" / "local.conf.append"
@@ -1220,12 +1259,21 @@ def stage_yocto(ctx: Context):
     sstate = ""
     if offline.is_file():
         sstate = offline.read_text(encoding="utf-8").splitlines()[0].strip()
-    deps = [p for p in (hw_xsa, conf_append, extra_layers) if p.is_file()]
-    if not done.is_file() or any(done.stat().st_mtime < p.stat().st_mtime
-                                 for p in deps):
+
+    def newer(paths):
+        return any(p.is_file() and done.stat().st_mtime < p.stat().st_mtime
+                   for p in paths)
+    if not done.is_file() or newer([hw_xsa]):
+        mode = "full"
+    elif newer([conf_append, extra_layers, offline]):
+        mode = "conf"
+    else:
+        mode = None
+    if mode:
         sh("configure-build.sh",
            [work, ctx.target, bsp, hw_xsa, sstate, ctx.repo.bd_name,
-            yocto_port_cfg_dir(ctx) or ""], "configure")
+            yocto_port_cfg_dir(ctx) or "", mode],
+           "configure" if mode == "full" else "configure (conf only)")
         done.write_text("configured by build.py\n")
     # 4. bitbake (always re-run while products are missing; it is incremental).
     sh("build-image.sh", [work, "edf-linux-disk-image", ctx.jobs],

@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: MIT
+# qsfp28-fmc-rocelet: the register window and the PS DDR window (generic UIO, device-tree
+# linux,uio-name) for roceletd; group rocelet
+SUBSYSTEM=="uio", ATTR{name}=="rocelet-regs", SYMLINK+="rocelet-regs", GROUP="rocelet", MODE="0660"
+SUBSYSTEM=="uio", ATTR{name}=="rocelet-ddr", SYMLINK+="rocelet-ddr", GROUP="rocelet", MODE="0660"

@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Opsero Electronic Design Inc.
+[Unit]
+Description=qsfp28-fmc-rocelet web UI (rocelet_web.py, port 80)
+After=network.target roceletd.service
+Wants=roceletd.service
+
+[Service]
+Type=simple
+User=rocelet
+Group=rocelet
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+ExecStart=/usr/bin/rocelet-web
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

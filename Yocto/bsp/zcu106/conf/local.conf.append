@@ -1,0 +1,21 @@
+# Copyright (C) 2026, Opsero Electronic Design Inc.  All rights reserved.
+#
+# SPDX-License-Identifier: MIT
+
+# qsfp28-fmc-rocelet, ZCU106 (zcu106): AMD EDF Yocto image (parse-sdt flow,
+# Yocto/scripts/configure-build.sh: MACHINE rocelet-zcu106 is generated from the Vivado XSA).
+# The PL bitstream goes into BOOT.BIN (the FSBL loads it before Linux); the GT and the MAC stay in
+# reset until roceletd has programmed the FMC's Si5328 (docs/source/zynqmp_hw.md, bring-up).
+#
+# Kernel command line: the EDF boot.scr builds it (DT /chosen/bootargs + root=... rootwait
+# uio_pdrv_genirq.of_id=generic-uio); BSP_EXTRA_BOOTARGS is appended by
+# meta-user/recipes-bsp/u-boot/u-boot-edf-scr_%.bbappend. The PS DDR window of the engine is a
+# reserved-memory carve-out in the device tree (256 MB at 0x6000_0000, system-user.dtsi), not CMA,
+# so the default CMA is kept.
+BSP_EXTRA_BOOTARGS = ""
+
+# meta-amd-edf's distro conf sets hostname:pn-base-files:amd-edf; :forcevariable outranks it.
+hostname:pn-base-files:forcevariable = "rocelet-z106"
+
+# Room in the rootfs for the tools installed at image time.
+IMAGE_ROOTFS_EXTRA_SPACE = "524288"

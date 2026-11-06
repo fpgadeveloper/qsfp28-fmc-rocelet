@@ -5,7 +5,9 @@
 to an NVIDIA ConnectX-6 Dx in the test host (Lenovo P520, RTX PRO 4000 Blackwell, HSB 3.0.0
 container), window on a monitor attached to the GPU. Every frame compared against the
 bit-exact model at 10, 40, 64 and 80 Gb/s with 0 mismatches; 20-minute soak at 64 Gb/s with 0
-frames lost. Measurements and limits: [Measured](#measured) and [Known limits](#known-limits).
+frames lost. Since version 0.5.0 it also runs with the ZCU106 target at up to 40 Gb/s (the
+link's rate, read from the board). Measurements and limits: [Measured](#measured) and
+[Known limits](#known-limits).
 ```
 
 The KCU116 plays the digitiser front end of a phased-array receiver. An **8 x 8 antenna array**
@@ -99,7 +101,10 @@ maps use one frame (no averaging); the spectrum display is smoothed (`--spec-avg
 
 ![The window as the application renders it (headless PNG from the board's frames, 10 Gb/s, attract mode)](images/beam-window.jpg)
 
-The application opens one 1920 x 1080 window, fullscreen (`--windowed` for a window):
+The application opens one 1920 x 1080 window, fullscreen (`--windowed` for a window). Its header
+(and the page's) names the source: `ZCU106 -> 40G RoCE -> GPU` or `KCU116 -> 100G RoCE -> GPU`,
+from the board's HSB register `LINK_GBPS` (`--board` names a ported board; `FPGA -> RoCE -> GPU`
+when the register cannot be read):
 
 * **Sky map** (left, large): the power map over the unit disc, title CONVENTIONAL (Bartlett,
   "power 0 .. -40 dB re peak") or MVDR ("power -10 .. -40 dB re element power"). Markers sit at the true source positions of the frame's
@@ -131,7 +136,7 @@ The application opens one 1920 x 1080 window, fullscreen (`--windowed` for a win
 | N | element noise: 100, 300, 1000, 3000 |
 | A | attract mode on / off |
 | R | reset the current preset (also drops the calibration) |
-| - / + | stream rate down / up: 1, 2, 5, 10, 20, 40, 64, 80 Gb/s (board source; also the keypad - / +) |
+| - / + | stream rate down / up: 1, 2, 5, 10, 20, 40, 64, 80 Gb/s, up to the board's link (1-40 on the ZCU106; board source; also the keypad - / +) |
 | Esc | quit |
 
 Mouse moves are coalesced to `--update-hz` (default 20) scene writes per second; a drag writes
@@ -174,7 +179,7 @@ Endpoints, for scripts and tests:
 |---|---|
 | `GET /events` | Server-Sent Events: `hello`, then about 10 `frame` events per second (JSON: the sky map as base64 uint8 128 x 128, true sources, steered beam, element mask, tiles, hint, message) |
 | `GET /state` | the latest frame state as one JSON object |
-| `POST /control` (JSON) or `GET /control?...` | `preset n`, `beamformer`, `calibrate`, `noise`, `attract`, `reset`, `element k` (0-63, k = 8 iy + ix), `drag phase=down\|move\|up u v cls=emitter\|jammer`, `rate gbps=<Gb/s>` (clamped to 1-80) or `rate step=1\|-1` (the next step of the keys - / +; 409 without the board) |
+| `POST /control` (JSON) or `GET /control?...` | `preset n`, `beamformer`, `calibrate`, `noise`, `attract`, `reset`, `element k` (0-63, k = 8 iy + ix), `drag phase=down\|move\|up u v cls=emitter\|jammer`, `rate gbps=<Gb/s>` (clamped to 1-80, 1-40 on the ZCU106) or `rate step=1\|-1` (the next step of the keys - / +; 409 without the board) |
 
 ```
 curl -N http://<gpu-host>:8090/events
@@ -257,7 +262,7 @@ none of that kind). On the monitor the left and right mouse buttons do the same.
 **Array 8 x 8**: the element layout as seen from the front; tap an element to fail it (red
 cross) and tap again to restore it. Preset 4 shows what failed elements do to the sidelobes.
 
-**Stream rate** (buttons *rate -* / *rate +*, keys - / +: 1, 2, 5, 10, 20, 40, 64, 80 Gb/s).
+**Stream rate** (buttons *rate -* / *rate +*, keys - / +: 1, 2, 5, 10, 20, 40, 64, 80 Gb/s; up to 40 on the ZCU106).
 The rate sets how fast the FPGA produces frames, not what is in them, so the picture does not
 change: every frame is the same snapshot of 4,096 samples from all 64 elements, the covariance
 has the same quality at 1 Gb/s as at 80, and the waveforms are defined as fractions of the
@@ -293,9 +298,12 @@ effect from the board's next frame start; the stream itself never stops.
 
 What is needed:
 
-* The board: KCU116 + 2x QSFP28 FMC, programmed with the 0.4.0 bitstream and firmware (the
-  build of this repository, `bootimages/` or `Vitis/boot/kcu116/rocelet_boot.bit`), QSFP28 port
-  0 connected to the host's 100G port as in [](hsb.md#quick-start).
+* The board: KCU116 + 2x QSFP28 FMC, programmed with the bitstream and firmware of version
+  0.4.0 or later (the build of this repository, `bootimages/` or
+  `Vitis/boot/kcu116/rocelet_boot.bit`), QSFP28 port 0 connected to the host's 100G port as in
+  [](hsb.md#quick-start). Or, since version 0.5.0, the **ZCU106** + 2x QSFP28 FMC (Linux image
+  or bare-metal console) with port 0 connected to the host's port at 40G: the demo then runs at
+  up to 40 Gb/s (start it with `rl hsb on` on the board, over SSH).
 * The host: a RoCE v2 NIC that writes into GPU memory (validated: ConnectX-6 Dx), an NVIDIA GPU,
   NVIDIA's HSB 3.0.0 container (`hololink-demo:3.0.0`: Holoscan 4.4, hololink 3.0.0, CuPy; no
   extra packages), and for the window a monitor on the GPU with the full NVIDIA display driver
@@ -347,7 +355,8 @@ a power cycle. Every run ends with a `PASS:` / `FAIL:` line and a JSON summary (
 The stream rate starts at `--rate` and changes while the stream runs: the keys - / + and the
 page write RATE_MBPS, the firmware recomputes the frame period (`C_HP_PERIOD`) at once, and the
 frame producer samples it at its next frame start, so the new rate applies from the next frame
-on. Live changes stay within 1-80 Gb/s (the test host is clean to 80). The stream tile shows the
+on. Live changes stay within 1-80 Gb/s (the test host is clean to 80), and within the board's
+link rate (HSB register `LINK_GBPS`): 1-40 Gb/s on the ZCU106 target, whose top key step is 40. The stream tile shows the
 measured rate against the rate set; the verify page age and the latency frame period follow the
 new rate.
 
@@ -365,6 +374,7 @@ Useful options:
 | `--windowed` | a 1920 x 1080 window instead of fullscreen |
 | `--fps`, `--update-hz`, `--attract-idle` | frames beamformed per second (default 60; the others are counted), scene writes per second (20), seconds before attract mode (10, 0 = never) |
 | `--script "t cmd args; ..."` or `@file` | replayed input (key, move, press / release, drag, scroll, elem, quit) through the same handlers: unattended tests |
+| `--board NAME` | board name in the window header and on the page (default: from `LINK_GBPS`, 100 KCU116, 40 / 10 ZCU106) |
 | `--reg-mode block\|single` | one block write per scene change (default) or one register write per word |
 | `--source synthetic\|csynthetic` | no board: frames from the numpy model (~10 frames/s) or the same generator as a CUDA kernel (~50-60 shown/s) |
 
@@ -475,6 +485,14 @@ the source hears nothing at all: the tone is gone from the spectrum. That is why
 beamformers need calibrated arrays, and why C comes before B in this preset.
 
 ## Measured
+
+**ZCU106 (version 0.5.0, 40G).** ZCU106 + OP120 port 0 on the Linux image, 3 m DAC to the
+ConnectX-6 Dx forced to 40000 with FEC off, the same host: the application read `LINK_GBPS` = 40
+and limited the rate range to 1-40 Gb/s ("--rate 64 > the link: 40 Gb/s"); the stream ran at
+about 38.8 Gb/s at the 40 Gb/s step, followed the keys 40 → 20 → 10 → 20 → 40 (the `+` key at
+40 refused), and the page's `rate gbps=64` / `gbps=0.5` requests were clamped to 40 / 1; all
+1,652 frames shown, 150 frames verified bit-exact, 0 lost. The rest of this section was
+measured with the KCU116 at 100G.
 
 Board: KCU116 + OP120 port 0, 3 m DAC, RS-FEC, MTU 4200, to a ConnectX-6 Dx (port 1, forced
 100G) in a Lenovo P520 (Xeon Skylake-SP, PCIe Gen3) with an RTX PRO 4000 Blackwell; HSB 3.0.0

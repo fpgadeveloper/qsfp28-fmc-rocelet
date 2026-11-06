@@ -27,6 +27,8 @@ extern eng_cfg_t ENG;
 #define RKEY_PAT       0x00001000u            /* MR0: pattern region, identity, read+write (self-test builds) */
 #define RKEY_MEM       0x00002001u            /* MR1: memory window, VA 0, read+write */
 #define RKEY_MEM_RO    0x00003002u            /* MR2: memory window, VA 0, read only */
+#define RKEY_DDR       0x00004003u            /* MR3 (ZynqMP): PS DDR window, VA 0, read+write */
+
 
 extern u8  MY_MAC[6];
 extern u32 MY_IP;

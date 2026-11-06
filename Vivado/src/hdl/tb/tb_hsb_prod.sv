@@ -38,8 +38,9 @@ logic        rnd_ready = 1'b0, pay_ready = 1'b1;
 always @(posedge clk) pay_ready <= rnd_ready ? 1'($urandom_range(0, 1)) : 1'b1;
 
 wire logic         m_wr_valid, m_pay_tvalid, m_pay_tlast, pay_busy, running, ev_frame, ev_stall_iq;
-wire logic         s_iq_pop, iq_enable, s_bm_pop, bm_enable;
-logic              iq_start, bm_start;
+wire logic         src_tready, src_enable;
+wire logic [1:0]   src_sel;
+logic              src_start;
 wire logic [255:0] m_wr_desc;
 wire logic [511:0] m_pay_tdata;
 wire logic [31:0]  frames;
@@ -52,9 +53,8 @@ rsys_hsb_prod dut (
     .cfg_pg_first(12'd0), .cfg_pg_last(12'd3), .cfg_frame(cfg_frame), .cfg_wrmax(cfg_wrmax),
     .cfg_period(cfg_period), .cfg_count(32'd0),
     .t_s(48'd0), .t_ns(cyc[29:0]),
-    .s_iq_valid(1'b0), .s_iq_data('0), .s_iq_pop(s_iq_pop), .iq_enable(iq_enable), .iq_start(iq_start),
-    .s_bm_valid(1'b0), .s_bm_data('0), .s_bm_sid('0), .s_bm_sframe('0), .s_bm_pop(s_bm_pop),
-    .bm_enable(bm_enable), .bm_start(bm_start),
+    .s_axis_src_tvalid(1'b0), .s_axis_src_tdata('0), .s_axis_src_tuser('0), .s_axis_src_tready(src_tready),
+    .src_sel(src_sel), .src_enable(src_enable), .src_start(src_start),
     .m_wr_valid(m_wr_valid), .m_wr_ready(1'b1), .m_wr_desc(m_wr_desc),
     .m_pay_tdata(m_pay_tdata), .m_pay_tvalid(m_pay_tvalid), .m_pay_tready(pay_ready), .m_pay_tlast(m_pay_tlast),
     .pay_busy(pay_busy), .running(running), .frames(frames), .page(page), .fnum(fnum),

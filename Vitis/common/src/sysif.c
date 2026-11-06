@@ -250,7 +250,8 @@ static const char *sys_cnt_name[RSYS_NCNT] = {
 	"rinj_seen", "rinj_done", "raw_sent", "cap_done", "lat_ovf", "tx_underrun", "mac_tx_unf", "mac_tx_bad_fcs",
 	"mac_align_lost", "wcq_ovf", "rcq_ovf", "wq_posted", "wq_drop", "mem_wr_bursts", "mem_rd_bursts", "tx_frames",
 	"rx_frames", "tx_op_req", "tx_op_ack", "tx_op_nak", "tx_op_rdrsp", "rx_op_req", "rx_op_ack", "rx_op_nak",
-	"rx_op_rdrsp", "rx_roce", "tx_roce", "", "", "", "", ""
+	"rx_op_rdrsp", "rx_roce", "tx_roce", "", "", "", "", "",
+	"odma_rx", "odma_drop", "odma_tx", "ddr_wr_bursts", "ddr_rd_bursts", "ddr_outside", "", ""
 };
 static const char *sys_bc_name[RSYS_NBC] = {
 	"", "wg_bytes", "wc_bytes", "sc_bytes", "rd_bytes", "lat_sum", "tx_bytes", "rx_bytes",
@@ -262,7 +263,7 @@ void sys_dump(void)
 	int n = 0;
 	for (int i = 0; i < RSYS_NCNT; i++) {
 		u32 v = cnt(i);
-		if (!v || !sys_cnt_name[i][0]) continue;
+		if (!v || !sys_cnt_name[i] || !sys_cnt_name[i][0]) continue;
 		xil_printf("  %s=%u", sys_cnt_name[i], v);
 		if (++n % 6 == 0) xil_printf("\r\n");
 	}
@@ -270,7 +271,7 @@ void sys_dump(void)
 	n = 0;
 	for (int i = 1; i < RSYS_NBC; i++) {
 		u64 v = bc(i);
-		if (!v || !sys_bc_name[i][0]) continue;
+		if (!v || !sys_bc_name[i] || !sys_bc_name[i][0]) continue;
 		xil_printf("  %s=", sys_bc_name[i]); pr_u64(v);
 		if (++n % 6 == 0) xil_printf("\r\n");
 	}
