@@ -78,6 +78,7 @@ engine with PAUSE TX on (see [](console.md), Zynq UltraScale+) and waits for the
 | `group` | `rocelet` | the group that owns the socket (mode 0660; without the group 0600, root only); the image puts `amd-edf` in it |
 | `regs_uio` | `rocelet-regs,rsys_aon_bd` | the UIO device name(s) of the register window, comma separated, first match wins |
 | `ddr_uio` | `rocelet-ddr` | the UIO device name of the PS DDR window |
+| `extra_uio` | `rocelet-mrmac` | further register blocks to map, UIO device names, comma separated; a missing device is skipped (the Versal design's MRMAC registers; nothing on the ZCU106) |
 
 ### Web UI access
 

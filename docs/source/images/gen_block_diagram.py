@@ -28,6 +28,17 @@ Generate the diagrams for the qsfp28-fmc-rocelet docs.
                              (Vivado/src/bd/bd_zynqmp.tcl,
                              Vivado/src/hdl/rocelet_sys.sv, rsys_aon.sv,
                              Vivado/src/constraints/zcu106.xdc)
+    rocelet-versal-block.png the Versal design (vck190_fmcp1; board-agnostic
+                             except the labelled VCK190 example values): the
+                             CIPS (M_AXI_LPD control, NoC ports S06 / S07 for the
+                             PS DDR window, S08 netdev DMA), the always-on block
+                             with the clock guard, rocelet_sys on the engine
+                             clock, the AXI DMA, the MRMAC adapter
+                             (mac_mrmac100g), the hard MRMAC and its GTY quad,
+                             the AXI IIC controllers and the 2x QSFP28 FMC
+                             (Vivado/src/bd/bd_versal.tcl,
+                             Vivado/src/hdl/mac/mac_mrmac100g.v,
+                             Vivado/src/constraints/vck190_fmcp1.xdc)
     hsb-device-flow.png      Holoscan Sensor Bridge device mode, end to end:
                              enumeration, register protocol, data plane on QP 13,
                              frame producer, ConnectX NIC, GPU memory
@@ -55,10 +66,12 @@ Dashed boxes = optional logic (the self-test logic, SELFTEST = 1).
 The PNGs are written next to this script (i.e. into docs/source/images/).
 
 Usage (from anywhere):
-    python3 docs/source/images/gen_block_diagram.py
+    python3 docs/source/images/gen_block_diagram.py            # every diagram
+    python3 docs/source/images/gen_block_diagram.py versal     # one or more by name
 """
 
 import os
+import sys
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -833,6 +846,345 @@ def draw_zynqmp():
 
 
 # -----------------------------------------------------------------------------
+# 1c. The Versal design (vck190_fmcp1), same layout as the Zynq UltraScale+
+#     diagram: the CIPS + NoC + DDR4 column on the left, the PL in the middle, the
+#     FMC card on the right.
+#
+# Cells, clocks, NoC ports, interrupts and addresses from
+# Vivado/src/bd/bd_versal.tcl; the adapter from Vivado/src/hdl/mac/mac_mrmac100g.v;
+# the rocelet_sys instances from Vivado/src/hdl/rocelet_sys.sv (DDR_EN, DDR_PORTS 1,
+# ODMA_EN, SELFTEST, DNA_EN 0); FMC pins and the GT reference clock from
+# Vivado/src/constraints/vck190_fmcp1.xdc.
+# -----------------------------------------------------------------------------
+def draw_versal():
+    fig, ax = new_fig(24.0, 18.0, 205, 152)
+    dash = (0, (4, 2))
+
+    # ---- CIPS + NoC + DDR4 column ----------------------------------------------------
+    ps_x0, ps_x1 = 2.0, 26.0
+    box(ax, ps_x0, 14.0, ps_x1 - ps_x0, 125.0, C_PS_FILL, C_PS_EDGE, "", lw=1.3)
+    ax.text((ps_x0 + ps_x1) / 2, 135.5, "Versal CIPS + NoC", ha="center", va="center",
+            fontsize=10.6, weight="bold", color=TXT)
+    ib_x0, ib_x1 = 3.5, 18.5
+    titled_box(ax, ib_x0, 99.0, ib_x1 - ib_x0, 32.0, "#ECECEC", C_PS_EDGE, "APU  Cortex-A72",
+               "Linux (AMD EDF\nYocto):\nroceletd, rl,\nweb UI,\nrl_net.ko → rl0\n\nor the bare-metal\n"
+               "console (same\nVitis/common/src)", title_fs=7.8, body_fs=6.9, title_dy=2.0)
+    titled_box(ax, ib_x0, 89.0, ib_x1 - ib_x0, 7.5, "#ECECEC", C_PS_EDGE, "GEM0",
+               "board RJ45:\nSSH, web UI", title_fs=7.4, body_fs=6.7, title_dy=1.6)
+    titled_box(ax, ib_x0, 80.0, ib_x1 - ib_x0, 6.5, "#ECECEC", C_PS_EDGE, "UART0, I2C0",
+               "console, VADJ", title_fs=7.4, body_fs=6.7, title_dy=1.6)
+    titled_box(ax, ib_x0, 40.0, ib_x1 - ib_x0, 37.0, "#ECECEC", C_PS_EDGE, "NoC → DDR4",
+               "axi_noc_0, one\nDDR4 controller\n(8 GB DIMM =\nLinux memory)\n\n"
+               "PS DDR window:\none region given\nat run time\n(Linux: 256 MB\nreserved-memory\n"
+               "at 0x6000_0000)", title_fs=8.2, body_fs=6.9, title_dy=2.0)
+    ax.text((ps_x0 + ps_x1) / 2, 27.0,
+            "pl0_ref_clk 100 MHz\n→ 3 MMCMs: 100, 200,\n250, 300, 390.625 MHz\n\n"
+            "pl_ps_irq0-4:\nrsys_aon, DMA x2,\nIIC x2",
+            ha="center", va="center", fontsize=6.9, color=C_REFCLK_LINE, weight="bold",
+            linespacing=1.3)
+
+    def ps_port(y, name):
+        ax.text(ps_x1 - 0.5, y, name, ha="right", va="center", fontsize=6.6,
+                color=C_CTRL_LINE, weight="bold", zorder=4)
+
+    # ---- fabric container ---------------------------------------------------------
+    fab_x0, fab_x1 = 29.0, 165.0
+    ax.add_patch(plt.Rectangle((fab_x0, 14.0), fab_x1 - fab_x0, 125.0,
+                               fc=C_FAB_FILL, ec=C_FAB_EDGE, lw=1.3, zorder=1))
+    ax.text((fab_x0 + fab_x1) / 2, 140.3,
+            "Versal PL  (VCK190: XCVC1902)", ha="center", va="bottom",
+            fontsize=11.5, weight="bold", color=TXT)
+
+    # ---- control plane: SmartConnect, always-on block, IIC --------------------------
+    smc_x, smc_w, smc_y0, smc_y1 = 30.5, 4.0, 100.0, 130.0
+    box(ax, smc_x, smc_y0, smc_w, smc_y1 - smc_y0, C_MAC_FILL, C_MAC_EDGE, "", lw=1.2)
+    ax.text(smc_x + smc_w / 2, (smc_y0 + smc_y1) / 2, "axi_smc  (clk_sys 100 MHz)",
+            ha="center", va="center", fontsize=7.0, weight="bold", color=TXT, rotation=90)
+    harrow(ax, ps_x1, smc_x, 124.0, "", C_LINKARR_FILL, C_LINKARR_EDGE, bh=0.8, hh=1.5,
+           hl=1.0)
+    ps_port(126.8, "M_AXI_LPD")
+    aon_x0, aon_x1, aon_y0, aon_y1 = 37.0, 58.5, 108.0, 134.0
+    titled_box(ax, aon_x0, aon_y0, aon_x1 - aon_x0, aon_y1 - aon_y0, C_MAC_FILL, C_MAC_EDGE,
+               "rsys_aon_0",
+               "always-on registers\n(clk_sys): GT / MAC\nresets, link + lane\nstatus, engine clock,"
+               "\nQSFP lines, CAPS,\none aggregated IRQ\n\nclock guard: every\naccess completes"
+               "\n(0xDEADC10C while\nrocelet_sys is reset)", title_fs=8.2, body_fs=6.8,
+               title_dy=1.9, z=3)
+    harrow(ax, smc_x + smc_w, aon_x0, 124.0, "", C_LINKARR_FILL, C_LINKARR_EDGE, bh=0.7,
+           hh=1.3, hl=0.8)
+    # IIC controllers next to the FMC, reached by a register line over the top
+    iic_x0, iic_x1 = 147.0, 163.5
+    titled_box(ax, iic_x0, 127.0, iic_x1 - iic_x0, 6.0, C_MAC_FILL, C_MAC_EDGE, "axi_iic_clk",
+               "Si5328", title_fs=7.2, body_fs=6.7, title_dy=1.5, z=3)
+    titled_box(ax, iic_x0, 119.0, iic_x1 - iic_x0, 6.0, C_MAC_FILL, C_MAC_EDGE,
+               "axi_iic_qsfp0", "QSFP28 module", title_fs=7.2, body_fs=6.7, title_dy=1.5, z=3)
+    line(ax, [(smc_x + smc_w / 2, smc_y1), (smc_x + smc_w / 2, 136.8), (144.5, 136.8),
+              (144.5, 114.0)], C_CTRL_LINE, lw=1.1)
+    route(ax, [(144.5, 130.0), (iic_x0, 130.0)], C_CTRL_LINE, lw=1.1, ms=7)
+    route(ax, [(144.5, 122.0), (iic_x0, 122.0)], C_CTRL_LINE, lw=1.1, ms=7)
+    # MRMAC s_axi + GT APB on the same register line
+    route(ax, [(144.5, 114.0), (148.0, 114.0), (148.0, 103.0)], C_CTRL_LINE, lw=1.1, ms=7)
+    ax.text(150.0, 115.6, "MRMAC regs,\nGT APB", ha="left", va="center", fontsize=6.2,
+            color=C_CTRL_LINE, linespacing=1.05)
+
+    # ---- rocelet_sys ------------------------------------------------------------------
+    rs_x0, rs_x1, rs_y0, rs_y1 = 62.0, 125.5, 17.0, 133.0
+    box(ax, rs_x0, rs_y0, rs_x1 - rs_x0, rs_y1 - rs_y0, "#FAFAFD", C_MAC_EDGE, "", lw=1.4)
+    ax.text(rs_x0 + 1.5, rs_y1 - 2.6, "rocelet_sys_0  (rocelet_sys.sv)",
+            ha="left", va="center", fontsize=9.4, weight="bold", color=TXT)
+    clk_tag(ax, rs_x1 - 1.5, rs_y1 - 2.6, "clk: engine clock 300 MHz", ha="right")
+
+    # guarded register window from the always-on block into u_split
+    top_y0, top_h = 113.0, 13.0
+    harrow(ax, aon_x1, 64.0, 119.5, "", C_LINKARR_FILL, C_LINKARR_EDGE, bh=0.8, hh=1.5,
+           hl=1.0)
+    ax.text(60.5, 114.6, "1 MB\nguarded", ha="center", va="center", fontsize=6.6,
+            color=C_CTRL_LINE, linespacing=1.1)
+    titled_box(ax, 64.0, top_y0, 10.5, top_h, C_CTRL_FILL, C_CTRL_EDGE, "u_split",
+               "AXI-Lite\ndecoder\n+0x00000 eng.\n+0x10000 regs\n+0x40000 URAM",
+               title_fs=7.8, body_fs=6.6, title_dy=1.8, z=3)
+    titled_box(ax, 76.0, top_y0, 10.5, top_h, C_CTRL_FILL, C_CTRL_EDGE, "u_regs",
+               "system regs:\nMAC control,\nDDR window,\ncounters,\nqueues, sources",
+               title_fs=7.8, body_fs=6.6, title_dy=1.8, z=3)
+    titled_box(ax, 88.0, top_y0, 11.0, top_h, C_MAC_FILL, C_MAC_EDGE, "u_crx",
+               "control-plane\nRX FIFO\n(bare-metal\nHSB path)", title_fs=7.8, body_fs=6.6,
+               title_dy=1.8, z=3)
+    titled_box(ax, 100.5, top_y0, 11.0, top_h, C_MAC_FILL, C_MAC_EDGE, "u_raw",
+               "raw TX frames,\ncapture buffer\nat the MAC", title_fs=7.8, body_fs=6.6,
+               title_dy=1.8, z=3)
+    titled_box(ax, 112.5, top_y0, 11.5, top_h, C_MAC_FILL, C_MAC_EDGE, "self-test",
+               "u_wchk, u_schk:\ncheckers\nu_lat: latency\nprobe",
+               title_fs=7.6, body_fs=6.6, title_dy=1.8, ls=dash, z=3)
+    harrow(ax, 74.5, 76.0, 119.5, "", C_LINKARR_FILL, C_LINKARR_EDGE, bh=0.5, hh=1.0,
+           hl=0.6, z=4)
+
+    # left column: memory windows, DDR masters, netdev DMA channel, WR queue
+    lc_x0, lc_x1 = 64.0, 84.0
+    eng_x0, eng_x1, eng_y0, eng_y1 = 92.0, 112.5, 78.0, 109.0
+    titled_box(ax, lc_x0, 99.0, lc_x1 - lc_x0, 10.0, C_MAC_FILL, C_MAC_EDGE, "u_mem",
+               "URAM window 256 KB\n(also the CPU's view)", title_fs=8.0, body_fs=6.8,
+               title_dy=1.8, z=3)
+    titled_box(ax, lc_x0, 87.5, lc_x1 - lc_x0, 8.0, C_MAC_FILL, C_MAC_EDGE, "u_dec  rsys_axi_dec",
+               "bit 40: pattern  bit 39: PS DDR\nelse URAM; outside: null", title_fs=7.4,
+               body_fs=6.5, title_dy=1.6, z=3)
+    titled_box(ax, lc_x0, 71.5, lc_x1 - lc_x0, 12.5, C_MAC_FILL, C_MAC_EDGE,
+               "M_AXI_DDRW / DDRR",
+               "PS DDR window: one\n512-bit master per\ndirection (DDR_PORTS 1,\nno interleave)",
+               title_fs=7.4, body_fs=6.5, title_dy=1.6, z=3)
+    titled_box(ax, lc_x0, 56.0, lc_x1 - lc_x0, 11.5, C_MAC_FILL, C_MAC_EDGE, "u_odma",
+               "netdev DMA channel:\nnon-RoCE frames to /\nfrom Linux, 32 KB FIFOs",
+               title_fs=7.8, body_fs=6.6, title_dy=1.7, z=3)
+    titled_box(ax, lc_x0, 42.0, lc_x1 - lc_x0, 10.5, C_MAC_FILL, C_MAC_EDGE, "u_wrq",
+               "firmware WR queue\n(payload from u_mem),\ncompletion queues",
+               title_fs=7.8, body_fs=6.6, title_dy=1.7, z=3)
+    # engine
+    titled_box(ax, eng_x0, eng_y0, eng_x1 - eng_x0, eng_y1 - eng_y0, C_MAC_FILL, C_MAC_EDGE,
+               "u_rl  rocelet_top",
+               "RoCE v2 engine\n(submodules/rocelet,\nv0.3, 512 bit)\n\n"
+               "RC requester +\nresponder, UC-HSB,\nARP / ICMP,\nPAUSE, counters\n\n"
+               "16 QPs, 128 WRs,\n256 KB URAM\nretransmit ring", title_fs=8.6, body_fs=6.7,
+               title_dy=2.1, lw=2.0, z=3)
+    # register paths (blue): u_split -> u_mem, u_split -> engine
+    route(ax, [(67.0, top_y0), (67.0, 109.0)], C_CTRL_LINE, lw=1.2, ms=7)
+    route(ax, [(71.5, top_y0), (71.5, 111.0), (94.0, 111.0), (94.0, eng_y1)], C_CTRL_LINE,
+          lw=1.2, ms=7)
+    # engine AXI4 master -> decoder -> URAM / DDR masters (green)
+    harrow(ax, lc_x1, eng_x0, 91.5, "", C_AXARR_FILL, C_AXARR_EDGE, double=True, bh=0.9,
+           hh=1.7, hl=1.1)
+    ax.text(88.0, 95.6, "AXI4\n512 b", ha="center", va="center", fontsize=6.6,
+            color=C_DATA_LINE, linespacing=1.05)
+    vblock(ax, 74.0, 95.5, 99.0, C_AXARR_FILL, C_AXARR_EDGE, bw=0.8, hw=1.5, hl=1.0)
+    vblock(ax, 74.0, 84.0, 87.5, C_AXARR_FILL, C_AXARR_EDGE, bw=0.8, hw=1.5, hl=1.0)
+    # other-traffic port <-> u_crx / u_raw (top) and u_odma (left)
+    vblock(ax, 97.0, eng_y1, top_y0, C_USER_FILL, C_USER_EDGE, bw=0.8, hw=1.5, hl=1.0,
+           double=False, z=4)
+    vblock(ax, 106.0, top_y0, eng_y1, C_USER_FILL, C_USER_EDGE, bw=0.8, hw=1.5, hl=1.0,
+           double=False, z=4)
+    ax.text(101.5, 111.2, "other traffic", ha="center", va="center", fontsize=6.6,
+            color=TXT)
+    line(ax, [(eng_x0, 80.0), (88.0, 80.0), (88.0, 61.75)], C_USER_EDGE, lw=1.6)
+    route(ax, [(88.0, 61.75), (lc_x1, 61.75)], C_USER_EDGE, lw=1.6, ms=9)
+    route(ax, [(lc_x1, 59.0), (95.5, 59.0), (95.5, eng_y0)], C_USER_EDGE, lw=1.6, ms=9)
+    ax.text(85.3, 66.2, "other\ntraffic", ha="left", va="center", fontsize=6.4, color=TXT,
+            linespacing=1.05)
+
+    # WR mux and sources
+    mux_y0, mux_y1 = 45.0, 49.5
+    box(ax, eng_x0, mux_y0, eng_x1 - eng_x0, mux_y1 - mux_y0, C_CTRL_FILL, C_CTRL_EDGE,
+        "WR mux: u_wg > u_hp > u_wrq", fs=6.6, z=3)
+    vblock(ax, 108.0, mux_y1, eng_y0, C_USER_FILL, C_USER_EDGE, bw=0.8, hw=1.5, hl=0.9,
+           double=False)
+    harrow(ax, lc_x1, eng_x0, 47.25, "", C_USER_FILL, C_USER_EDGE, bh=0.7, hh=1.3, hl=0.9)
+    ax.text(86.5, 44.2, "WRs", ha="center", va="center", fontsize=6.6, color=TXT)
+    route(ax, [(100.0, eng_y0), (100.0, 53.0), (lc_x1, 53.0)], C_USER_EDGE, lw=1.6, ms=9)
+    ax.text(101.0, 55.0, "completions", ha="left", va="center", fontsize=6.6, color=TXT)
+
+    # RX / TX path: fault injectors (dashed); no width converters (the adapter is 512 bits)
+    inj_x0, inj_x1 = 114.5, 124.0
+    rx_y, tx_y = 98.5, 85.5
+    titled_box(ax, inj_x0, 94.0, inj_x1 - inj_x0, 9.0, C_MAC_FILL, C_MAC_EDGE, "u_rinj",
+               "RX fault\ninjector", title_fs=7.2, body_fs=6.4, title_dy=1.6, ls=dash, z=3)
+    titled_box(ax, inj_x0, 81.0, inj_x1 - inj_x0, 9.0, C_MAC_FILL, C_MAC_EDGE, "u_inj",
+               "TX fault inj.\n+ skid", title_fs=7.2, body_fs=6.4, title_dy=1.6, ls=dash, z=3)
+    harrow(ax, inj_x0, eng_x1, rx_y, "", C_USER_FILL, C_USER_EDGE, bh=0.8, hh=1.5, hl=0.6)
+    harrow(ax, eng_x1, inj_x0, tx_y, "", C_USER_FILL, C_USER_EDGE, bh=0.8, hh=1.5, hl=0.6)
+
+    # self-test WR generator (dashed)
+    titled_box(ax, 114.5, 55.0, 9.5, 10.0, C_MAC_FILL, C_MAC_EDGE, "u_wg",
+               "WR gen.,\npattern\npayload", title_fs=7.6, body_fs=6.5, title_dy=1.7,
+               ls=dash, z=3)
+    route(ax, [(119.0, 55.0), (119.0, 47.25), (eng_x1, 47.25)], C_USER_EDGE, lw=1.6, ms=9)
+
+    # HSB device side with the streaming source boundary
+    dashed_group(ax, 63.5, 19.0, 61.0, 20.5, "Holoscan Sensor Bridge device side",
+                 ec=C_MAC_EDGE, fs=7.0)
+    box(ax, 66.0, 31.5, 15.0, 4.2, C_MAC_FILL, C_MAC_EDGE, "u_iqs  IQ16 generator", fs=6.6,
+        z=3)
+    box(ax, 66.0, 26.3, 15.0, 4.2, C_MAC_FILL, C_MAC_EDGE, "u_bms  8 x 8 array gen.", fs=6.6,
+        z=3)
+    box(ax, 66.0, 21.1, 15.0, 4.2, "#FFFFFF", C_USER_EDGE,
+        "input 3: a design source\n(PL or AI Engine stream)", fs=6.0, ls=dash, z=3)
+    box(ax, 83.5, 21.1, 3.2, 14.6, C_CTRL_FILL, C_CTRL_EDGE, "", z=3)
+    ax.text(85.1, 28.4, "u_smux  (s_axis_src)", ha="center", va="center", fontsize=6.4,
+            rotation=90, color=TXT, zorder=4)
+    for yy in (33.6, 28.4, 23.2):
+        harrow(ax, 81.0, 83.5, yy, "", C_USER_FILL, C_USER_EDGE, bh=0.55, hh=1.0, hl=0.6)
+    titled_box(ax, 90.0, 27.0, 22.0, 9.0, C_MAC_FILL, C_MAC_EDGE, "u_hp  frame producer",
+               "data WRITEs + metadata WRITE-imm,\npage ring, pacing; counter source",
+               title_fs=7.6, body_fs=6.4, title_dy=1.7, z=3)
+    harrow(ax, 86.7, 90.0, 31.5, "", C_USER_FILL, C_USER_EDGE, bh=0.7, hh=1.3, hl=0.8)
+    box(ax, 90.0, 21.1, 22.0, 4.2, C_MAC_FILL, C_MAC_EDGE, "u_ptime  seconds / ns", fs=6.6,
+        z=3)
+    box(ax, 113.5, 21.1, 10.0, 4.2, "#FFFFFF", C_MAC_EDGE, "DNA: eFUSE\n(software)", fs=5.9,
+        ls=dash, z=3)
+    route(ax, [(101.0, 25.3), (101.0, 27.0)], C_THIN, lw=1.1, ms=6)
+    vblock(ax, 108.0, 36.0, mux_y0, C_USER_FILL, C_USER_EDGE, bw=0.8, hw=1.5, hl=0.9,
+           double=False)
+    # gen_clk (orange) = clk_gen 200 MHz
+    route(ax, [(ps_x1, 19.5), (64.5, 19.5), (64.5, 33.6), (66.0, 33.6)], C_REFCLK_LINE,
+          lw=1.3, ms=7)
+    route(ax, [(64.5, 28.4), (66.0, 28.4)], C_REFCLK_LINE, lw=1.3, ms=7)
+    clk_tag(ax, 31.0, 21.3, "clk_gen 200 MHz = gen_clk", fs=6.8, ha="left")
+
+    # ---- PS DDR window: 2 x 1:1 SmartConnect -> NoC S06 / S07 --------------------------
+    sd_x0, sd_x1 = 38.0, 56.0
+    titled_box(ax, sd_x0, 70.5, sd_x1 - sd_x0, 15.5, C_MAC_FILL, C_MAC_EDGE,
+               "smc_ddrw / smc_ddrr",
+               "2 x 1:1 SmartConnect,\n512 b, engine clock\n(the NoC port does\nthe clock crossing)",
+               title_fs=7.0, body_fs=6.5, title_dy=1.6, z=3)
+    for yy, port in ((81.0, "S06 wr 512 b"), (76.0, "S07 rd 512 b")):
+        harrow(ax, ps_x1, sd_x0, yy, "", C_AXARR_FILL, C_AXARR_EDGE, double=True, bh=0.6,
+               hh=1.1, hl=0.8)
+        harrow(ax, sd_x1, lc_x0, yy, "", C_AXARR_FILL, C_AXARR_EDGE, double=True, bh=0.6,
+               hh=1.1, hl=0.8)
+        ps_port(yy + 1.9, port)
+    ax.text(60.0, 87.8, "writes /\nreads", ha="center", va="center", fontsize=6.3,
+            color=C_DATA_LINE, linespacing=1.05)
+
+    # ---- netdev DMA: u_odma <-> width converters + AXI DMA -> NoC S08 -----------------
+    dm_x0, dm_x1 = 37.0, 56.0
+    titled_box(ax, dm_x0, 50.0, dm_x1 - dm_x0, 17.0, C_MAC_FILL, C_MAC_EDGE, "axi_dma_0",
+               "AXI DMA, scatter-gather,\n64-bit addresses\n64 b @ clk_dma 250 MHz\n"
+               "+ 512↔64 converters\n+ smc_dma\nLinux: rl_net.ko",
+               title_fs=7.8, body_fs=6.5, title_dy=1.8, z=3)
+    harrow(ax, lc_x0, dm_x1, 63.0, "", C_USER_FILL, C_USER_EDGE, bh=0.6, hh=1.1, hl=0.7)
+    harrow(ax, dm_x1, lc_x0, 59.5, "", C_USER_FILL, C_USER_EDGE, bh=0.6, hh=1.1, hl=0.7)
+    ax.text(60.0, 66.6, "S2MM / MM2S", ha="center", va="center", fontsize=6.0, color=TXT)
+    harrow(ax, ps_x1, dm_x0, 58.0, "", C_AXARR_FILL, C_AXARR_EDGE, double=True, bh=0.6,
+           hh=1.1, hl=0.8)
+    ps_port(60.4, "S08 DMA")
+
+    # ---- MAC adapter, MRMAC and the GTY quad --------------------------------------------
+    mac_x0, mac_x1, mac_y0, mac_y1 = 127.5, 140.5, 74.0, 109.0
+    titled_box(ax, mac_x0, mac_y0, mac_x1 - mac_x0, mac_y1 - mac_y0, C_MAC_FILL, C_MAC_EDGE,
+               "mac0",
+               "mac_mrmac100g\n\nRX: packer\n48 → 64 B,\nasync FIFO,\nwhole-frame\ndrop\n\n"
+               "TX: packet\nFIFO (store &\nforward),\n64 → 48 B",
+               title_fs=8.6, body_fs=6.5, title_dy=2.0, lw=1.3, z=3)
+    harrow(ax, mac_x0, inj_x1, rx_y, "", C_USER_FILL, C_USER_EDGE, bh=0.9, hh=1.7, hl=1.0)
+    harrow(ax, inj_x1, mac_x0, tx_y, "", C_USER_FILL, C_USER_EDGE, bh=0.9, hh=1.7, hl=1.0)
+    ax.text((inj_x1 + mac_x0) / 2, rx_y + 2.8, "RX", ha="center", va="center", fontsize=6.8,
+            weight="bold", color=TXT)
+    ax.text((inj_x1 + mac_x0) / 2, tx_y + 2.8, "TX", ha="center", va="center", fontsize=6.8,
+            weight="bold", color=TXT)
+    mr_x0, mr_x1 = 143.0, 153.0
+    titled_box(ax, mr_x0, 80.0, mr_x1 - mr_x0, 23.0, C_GT_FILL, C_GT_EDGE, "MRMAC",
+               "MRMAC_X0Y0\n1x100GE\nCAUI-4\nRS-FEC\n(hard)\n\n384 b\n@ 390.625", title_fs=8.2,
+               body_fs=6.4, title_dy=1.9)
+    harrow(ax, mac_x1, mr_x0, 91.5, "", C_GT_FILL, C_GT_EDGE, double=True, bh=0.8, hh=1.5,
+           hl=0.8)
+    gt_x0, gt_x1 = 155.0, 163.5
+    titled_box(ax, gt_x0, 80.0, gt_x1 - gt_x0, 23.0, C_GT_FILL, C_GT_EDGE, "GTY",
+               "quad\nX1Y1\nx4\n25.78\nGb/s\nper lane", title_fs=8.2, body_fs=6.4, title_dy=1.9)
+    harrow(ax, mr_x1, gt_x0, 91.5, "", C_GT_FILL, C_GT_EDGE, double=True, bh=0.8, hh=1.5,
+           hl=0.6)
+    clk_tag(ax, (mac_x0 + mac_x1) / 2, 66.0, "engine clock\n300 MHz\n↔ clk_axis\n390.625 MHz\n"
+            "(both free-\nrunning MMCMs)", fs=6.7)
+    clk_tag(ax, (mr_x0 + gt_x1) / 2, 72.0, "GT clocks: per-lane\nBUFG_GT", fs=6.5)
+    # generic MAC boundary sideband: u_regs <-> mac0 (and the status into rsys_aon)
+    line(ax, [(81.25, top_y0 + top_h), (81.25, 128.0), (127.0, 128.0)], C_THIN, lw=1.1)
+    route(ax, [(127.0, 128.0), (127.0, 112.0), (131.0, 112.0), (131.0, mac_y1)], C_THIN,
+          lw=1.1, ms=7)
+    ax.text(128.2, 120.5, "generic MAC\nboundary:\nmac_ctl / pz /\naddr, mac_stat /\nev / pause",
+            ha="left", va="center", fontsize=6.2, color=C_MUTED, linespacing=1.08)
+
+    # ---- FMC card -----------------------------------------------------------------------
+    fmc_x0, fmc_x1 = 168.5, 203.0
+    ax.add_patch(plt.Rectangle((fmc_x0, 14.0), fmc_x1 - fmc_x0, 125.0,
+                               fc=C_FMC_FILL, ec=C_FMC_EDGE, lw=1.3, zorder=1))
+    ax.text((fmc_x0 + fmc_x1) / 2, 134.0, "2x QSFP28 FMC (OP120)\non the board's FMC\n(VCK190: FMCP1)",
+            ha="center", va="center", fontsize=8.4, weight="bold", color=TXT, linespacing=1.2)
+    cg_x0, cg_x1 = 171.0, 201.0
+    titled_box(ax, cg_x0, 108.0, cg_x1 - cg_x0, 18.0, C_CLK_FILL, C_CLK_EDGE, "Si5328",
+               "322.265625 MHz GT reference\nclock (GBTCLK0_M2C), programmed\nby software after VADJ, before\n"
+               "the GT reset is released\nI2C (LA02); LOS (LA06_P)", title_fs=8.4, body_fs=6.6,
+               title_dy=1.9)
+    titled_box(ax, cg_x0, 62.0, cg_x1 - cg_x0, 40.0, C_SLOT_FILL, C_FMC_EDGE, "QSFP28 port 0",
+               "100G: QSFP28 DAC or AOC to the\nhost NIC (100GBASE-CR4 / -SR4,\nRS-FEC)\n\n"
+               "module I2C (LA03):\naxi_iic_qsfp0\n\n"
+               "ModSelL, ResetL, LPMode,\nModPrsL, IntL, LEDs:\nrsys_aon", title_fs=8.4,
+               body_fs=6.6, title_dy=2.0)
+    titled_box(ax, cg_x0, 18.0, cg_x1 - cg_x0, 18.0, C_SLOT_FILL, C_FMC_EDGE, "QSFP28 port 1",
+               "not used: held deselected,\nin reset, low power; its lanes\n(DP4-7, MRMAC_X0Y2) reserved",
+               title_fs=8.2, body_fs=6.6, title_dy=1.9, ls=dash)
+    harrow(ax, gt_x1, cg_x0, 91.5, "", C_LINKARR_FILL, C_LINKARR_EDGE, double=True,
+           bh=1.0, hh=1.9, hl=1.1)
+    ax.text((gt_x1 + cg_x0) / 2, 96.6, "FMC\nDP0-3", ha="center", va="center", fontsize=6.6,
+            color=TXT, linespacing=1.05)
+    # I2C (thin blue) and reference clock (orange)
+    route(ax, [(iic_x1, 130.0), (186.0, 130.0), (186.0, 126.0)], C_CTRL_LINE, lw=1.1, ms=7)
+    route(ax, [(iic_x1, 122.0), (166.5, 122.0), (166.5, 99.0), (cg_x0, 99.0)], C_CTRL_LINE,
+          lw=1.1, ms=7)
+    route(ax, [(cg_x0, 111.0), (159.25, 111.0), (159.25, 103.0)], C_REFCLK_LINE, lw=1.4, ms=8)
+
+    legend(ax, 31.0, 46.0, [
+        (C_LINKARR_FILL, C_LINKARR_EDGE, "register access (AXI-Lite)"),
+        (C_AXARR_FILL, C_AXARR_EDGE, "memory (AXI4 / NoC)"),
+        (C_USER_FILL, C_USER_EDGE, "AXI4-Stream"),
+        (None, C_REFCLK_LINE, "clocks"),
+        (None, C_THIN, "sideband"),
+    ], fs=6.6, dy=3.2)
+
+    # ---- notes strip -----------------------------------------------------------------------
+    titled_box(ax, 2.0, 0.0, 201.0, 11.0, C_CTRL_FILL, C_CTRL_EDGE,
+               "Address map (M_AXI_LPD): rsys_aon_0 + rocelet_sys 0x8000_0000 (1 MB: engine +0x0, "
+               "system registers +0x1_0000, URAM +0x4_0000, always-on +0x8_0000), axi_iic_clk "
+               "0x8010_0000, axi_iic_qsfp0 0x8011_0000, axi_dma_0 0x8012_0000, MRMAC 0x8013_0000, "
+               "GT APB 0x8014_0000",
+               "Dashed: self-test logic (\"selftest\" in config/data.json).  Board specific (the values "
+               "shown are the VCK190's): the FMC slot, the GT quad, the MRMAC site and the reference-clock "
+               "pin, the CIPS preset (DDR, GEM, UART), VADJ.\nThe FMC VADJ rail is switched on by software "
+               "over the PS I2C (U-Boot, the console, roceletd); the device DNA comes from the PMC's eFUSE "
+               "cache.",
+               title_fs=7.2, body_fs=6.8, title_dy=2.6)
+    ax.text(102.5, 148.5,
+            "qsfp28-fmc-rocelet  —  Versal design (vck190_fmcp1: VCK190 + 2x QSFP28 FMC, "
+            "QSFP28 port 0, 100G)",
+            ha="center", va="center", fontsize=13.0, weight="bold", color=TXT)
+    save(fig, "rocelet-versal-block.png")
+
+
+# -----------------------------------------------------------------------------
 # 2. HSB device mode, end to end.
 #
 # Firmware side from Vitis/common/src/hsb.c (bootp_send, rx_frame, dp_start:
@@ -1189,12 +1541,17 @@ def draw_beam_demo():
     save(fig, "beam-demo-flow.png")
 
 
+DIAGRAMS = {"block": draw_block, "zynqmp": draw_zynqmp, "versal": draw_versal,
+            "device_flow": draw_device_flow, "app_pipeline": draw_app_pipeline,
+            "beam_demo": draw_beam_demo}
+
+
 def main():
-    draw_block()
-    draw_zynqmp()
-    draw_device_flow()
-    draw_app_pipeline()
-    draw_beam_demo()
+    names = sys.argv[1:] or list(DIAGRAMS)
+    for n in names:
+        if n not in DIAGRAMS:
+            sys.exit("unknown diagram '%s' (one of: %s)" % (n, ", ".join(DIAGRAMS)))
+        DIAGRAMS[n]()
 
 
 if __name__ == "__main__":

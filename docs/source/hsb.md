@@ -9,8 +9,11 @@ counter and IQ16 frames through the Linux-UDP receiver and through the RoCE rece
 memory (up to 80 Gb/s, the test host's NIC-to-GPU limit), the Holoscan application, the
 producer watchdog, the link pause and the module API. Since version 0.5.0 also on the ZCU106
 target at 40G (enumeration, registers, IQ16 and counter frames into GPU memory at 39.0 Gb/s with
-every frame checked, the beamforming demo). Known limitations: see [](revision_history.md).
+every frame checked, the beamforming demo). The VCK190 target (100G) runs the same device mode
+on its Linux image and bare-metal console. Known limitations: see [](revision_history.md).
 ```
+
+% TODO(m3): HSB status on the VCK190 (enumeration, IQ16 / counter frames into GPU memory at 100G, rate measured).
 
 With `hsb on` on the console, the board behaves as a Holoscan Sensor Bridge (HSB) device for
 NVIDIA's HSB host software (version 3.0.0): the host finds it (enumeration), reads and writes
@@ -68,7 +71,8 @@ How to read the diagram (the numbers are the steps in the strip at the bottom):
 
 1. Program the board and connect QSFP28 port 0 to the host's port (100G for the KCU116, 40G for
    the ZCU106, as in [](getting_started.md)). On the console: `hsb on` (ZCU106 Linux image:
-   `rl hsb on`, or `hsb = on` in `/etc/rocelet/rocelet.conf` to start it at every boot).
+   `rl hsb on`, or `hsb = on` in `/etc/rocelet/rocelet.conf` to start it at every boot; the
+   same on the VCK190 at 100G).
 2. On the host, in NVIDIA's HSB 3.0.0 container with `--net host --privileged`, with the
    board-facing interface on 192.168.20.0/24 and an MTU of at least 4200:
 
@@ -220,7 +224,7 @@ address from it and sends the register protocol there.
 | BOOTP | op 1, htype 1, hlen 6, xid 0 (data plane 0), secs, ciaddr = board IP, chaddr = board MAC |
 | vendor area | tag 0xE0, "NVDA" (a protocol constant the HSB host requires; not a claim of origin), data plane 0, enumeration version 2 |
 | compat-id | 0x2603 (little-endian; selects the HSB register layout the host programs) |
-| UUID | **98183d0f-18ee-4719-a3b4-ca69e9b94c97** (qsfp28-fmc-rocelet, the same on every target: KCU116 and ZCU106 with the OP120) |
+| UUID | **98183d0f-18ee-4719-a3b4-ca69e9b94c97** (qsfp28-fmc-rocelet, the same on every target: KCU116, ZCU106 and VCK190 with the OP120) |
 | serial number | 7 bytes, unique per board (below) |
 | HSB IP version | 0x2603 (little-endian) |
 | status | bit 1 = serial number from hardware (DNA), bit 0 = PTP time valid (0) |
@@ -230,7 +234,9 @@ address from it and sends the register protocol there.
 configuration by `DNA_PORTE2`; `S_DNA0..2`) into 56 bits: serial = DNA[55:0] XOR DNA[95:56],
 sent big-endian. `hsb serial` prints the DNA and the serial. The HSB host keeps one device
 object per serial number, so two boards on one network must differ; the MAC address of the
-design is fixed (`02:0a:35:72:6c:01`), the DNA is not.
+design is fixed (`02:0a:35:72:6c:01`), the DNA is not. On the VCK190 (no DNA port in the
+Versal PL) the firmware reads the device's 128-bit DNA from the PMC's eFUSE cache instead and
+folds it the same way: serial = DNA[55:0] XOR DNA[111:56] XOR DNA[127:112].
 
 **set-ip.** `hololink-set-ip <mac> <ip>` sends a BOOTP reply to UDP 12268; the firmware adopts
 the new address (`yiaddr`, when `chaddr` is its MAC) for the engine and the enumeration. The
@@ -296,7 +302,7 @@ reserved words read 0.
 | 0x7F00000C | SCENE | RW | IQ16 scene: 1 survey (default), 2 radar, 3 tones, 4 noise; next enable |
 | 0x7F000010 | FRAMES | R | frames completed since the producer last started (an enable or a link-pause resume) |
 | 0x7F000014 | STATUS | R | [0] producer running [1] data plane enabled [2] producer paused for the link [3] link pause enabled [4] keepalive watchdog armed (KEEPALIVE_TIMEOUT_MS not 0) |
-| 0x7F000018 | LINK_GBPS | R | the link rate of the board's target in Gb/s: 100 (KCU116), 40 (ZCU106, omac_40g), 10 (ZCU106 10G option); 0 on consoles before 0.5.0. The beam demo caps its stream rate at it |
+| 0x7F000018 | LINK_GBPS | R | the link rate of the board's target in Gb/s: 100 (KCU116, VCK190), 40 (ZCU106, omac_40g), 10 (ZCU106 10G option); 0 on consoles before 0.5.0. The beam demo caps its stream rate at it |
 | 0x7F00001C | reserved | R | 0 |
 | 0x7F000020 | KEEPALIVE_TIMEOUT_MS | RW | 0 = watchdog off (default). Otherwise the data plane stops when no KEEPALIVE write has arrived for this many milliseconds while it is enabled. A write restarts the timer. Returns to 0 at an HSB reset (0x0004 bit 3), at `hsb on`, and when the watchdog fires |
 | 0x7F000024 | KEEPALIVE | RW | write (any value): restart the watchdog timer. Read: milliseconds since the timer last restarted |

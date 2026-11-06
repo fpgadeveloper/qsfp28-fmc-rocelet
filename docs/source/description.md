@@ -3,16 +3,20 @@
 Both families of targets are built around one module, `rocelet_sys`
 (`Vivado/src/hdl/rocelet_sys.sv`): the rocelet engine, its memory windows, the system registers,
 the firmware's work-request queue, the self-test logic and the Holoscan Sensor Bridge (HSB)
-producer with its sources. It runs in the MAC user clock and talks to the MAC only through a
-generic MAC boundary (`mac_ctl`, `mac_stat`, `mac_ev`, `mac_pause`, AXI-Streams at the MAC width),
-so the same module serves the 100G CMAC and the open-source omac MACs. This page describes
+producer with its sources. It runs in one clock (the MAC user clock on the KCU116 and the
+ZCU106, a free-running engine clock on the VCK190) and talks to the MAC only through a generic
+MAC boundary (`mac_ctl`, `mac_stat`, `mac_ev`, `mac_pause`, AXI-Streams at the MAC width), so
+the same module serves the 100G CMAC, the open-source omac MACs and the Versal MRMAC. This page describes
 what is common; the system around it is on the family pages ([](hardware.md)):
 
 * [](microblaze_hw.md): the MicroBlaze design (`kcu116`): MicroBlaze console, CMAC behind the
   adapter `mac_cmac_adapt`, address map, block diagram;
 * [](zynqmp_hw.md): the Zynq UltraScale+ design (`zcu106`): the PS (Linux or bare metal), the
   always-on block with the clock guard, the PS DDR window, the netdev DMA channel, the omac MACs,
-  block diagram, register and address maps; [](zynqmp_linux.md) for its Linux stack.
+  block diagram, register and address maps; [](zynqmp_linux.md) for its Linux stack;
+* [](versal_hw.md): the Versal design (`vck190_fmcp1`): the Zynq UltraScale+ system shell on the
+  Cortex-A72, the MRMAC behind the adapter `mac_mrmac100g`, the engine on its own 300 MHz clock,
+  the PS DDR window over the NoC; [](versal_linux.md) for its Linux image.
 
 ## The rocelet engine
 
@@ -22,16 +26,16 @@ level, `rocelet_top`; its port list is documented in the rocelet docs,
 [register map](https://rocelet.ethernetfmc.com/en/latest/registers.html). The engine's build parameters
 come from `config/data.json` (`engine`):
 
-| Parameter | kcu116 | zcu106 | Meaning |
-|-----------|--------|--------|---------|
-| `NUM_QP` | 16 | 16 | queue pairs |
-| `NUM_MR` | 16 | 16 | memory windows (R_Key low bits select the window) |
-| `READ_DEPTH` | 16 | 16 | outstanding RDMA READs per QP (responder) |
-| `MAX_WR` | 128 | 128 | outstanding work requests |
-| `RTX_MODE` | RING | RING | requester retransmission from an on-chip payload ring |
-| `RING_BYTES` | 262144 | 262144 | retransmit ring: 256 KB of UltraRAM |
-| `HSB_EN` | 1 | 1 | Holoscan Sensor Bridge packet format (QP type UC-HSB) |
-| `CLK_KHZ` / `LINK_GBPS` | 322266 / 100 | 156250 / 40 (10G option: 10) | engine clock and link speed (rocelet v0.3; PAUSE quantum, capability registers) |
+| Parameter | kcu116 | zcu106 | vck190_fmcp1 | Meaning |
+|-----------|--------|--------|--------------|---------|
+| `NUM_QP` | 16 | 16 | 16 | queue pairs |
+| `NUM_MR` | 16 | 16 | 16 | memory windows (R_Key low bits select the window) |
+| `READ_DEPTH` | 16 | 16 | 16 | outstanding RDMA READs per QP (responder) |
+| `MAX_WR` | 128 | 128 | 128 | outstanding work requests |
+| `RTX_MODE` | RING | RING | RING | requester retransmission from an on-chip payload ring |
+| `RING_BYTES` | 262144 | 262144 | 262144 | retransmit ring: 256 KB of UltraRAM |
+| `HSB_EN` | 1 | 1 | 1 | Holoscan Sensor Bridge packet format (QP type UC-HSB) |
+| `CLK_KHZ` / `LINK_GBPS` | 322266 / 100 | 156250 / 40 (10G option: 10) | 300000 / 100 | engine clock and link speed (rocelet v0.3; PAUSE quantum, capability registers) |
 
 ## Data paths
 
@@ -48,8 +52,10 @@ come from `config/data.json` (`engine`):
 * **Holoscan Sensor Bridge frames to the host:** the HSB frame producer issues the data and
   metadata work requests of each frame (IQ16, beam array or counter payload) once a host has configured
   the data plane through the HSB register protocol; see [](hsb.md).
-* **PS DDR (Zynq UltraScale+ only):** local addresses with bit 39 set reach a region of PS DDR
-  given at run time, over two HP ports per direction ([](zynqmp_hw.md#memory-windows-uram-and-ps-ddr));
+* **PS DDR (Zynq UltraScale+ and Versal):** local addresses with bit 39 set reach a region of PS
+  DDR given at run time, over two HP ports per direction on the Zynq UltraScale+
+  ([](zynqmp_hw.md#memory-windows-uram-and-ps-ddr)) and one NoC port per direction on Versal
+  ([](versal_hw.md#memory-windows-uram-and-ps-ddr-over-the-noc));
   the consoles add memory window `MR3` over it. The MicroBlaze design has the URAM window only
   ([](microblaze_hw.md#rocelet_sys-in-this-design)).
 
@@ -133,7 +139,8 @@ ports (as with omac_10g / omac_40g), and `ZU=1` adds the PS DDR window (two port
 through `rsys_axi_ilv`; `DDRP=1` for one) and the netdev DMA channel with their tests (`ddr`,
 `odma`), e.g. `MAC_WIDTH=256 ZU=1 Vivado/src/hdl/tb/run_xsim.sh`. `run_xsim_aon.sh` tests the
 always-on block and its clock guard (`tb_aon`), `run_xsim_ilv.sh` the PS DDR interleave
-(`tb_axi_ilv`, throughput with each port modelled at 128 bits / 250 MHz).
+(`tb_axi_ilv`, throughput with each port modelled at 128 bits / 250 MHz), `run_xsim_mrmac.sh`
+the Versal MRMAC adapter against a model of the MRMAC client interface (`tb_mrmac100g`).
 
 `Vivado/src/hdl/tb/run_xsim_prod.sh` runs the frame producer alone (`tb_hsb_prod`, counter
 source) for its live frame period: the period written while the stream runs (ten changes at

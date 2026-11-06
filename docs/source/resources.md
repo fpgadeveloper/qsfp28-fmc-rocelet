@@ -2,10 +2,47 @@
 
 Vivado 2025.2, self-test logic built in. Devices: `kcu116` XCKU5P-FFVB676-2E (216,960 LUT,
 433,920 FF, 480 BRAM36, 64 URAM, 1,824 DSP); `zcu106` XCZU7EV-FFVC1156-2-E (230,400 LUT,
-460,800 FF, 312 BRAM36, 96 URAM, 1,728 DSP). The rates measured with the ZCU106 are in
-[the last section](#measured-zcu106-40g-and-10g); the KCU116's on [](hardware_test.md). The
+460,800 FF, 312 BRAM36, 96 URAM, 1,728 DSP); `vck190_fmcp1` XCVC1902-2MSEVSVA2197 (899,840
+LUT, 1,799,680 FF, 967 BRAM36, 463 URAM, 1,968 DSP). The rates measured with the ZCU106 are in
+[their section](#measured-zcu106-40g-and-10g), those of the VCK190 in
+[the last section](#measured-vck190_fmcp1-100g); the KCU116's on [](hardware_test.md). The
 current figures of each board are also in the Board specifics of its family page
-([](microblaze_hw.md#board-specifics), [](zynqmp_hw.md#board-specifics)).
+([](microblaze_hw.md#board-specifics), [](zynqmp_hw.md#board-specifics),
+[](versal_hw.md#board-specifics)).
+
+## vck190_fmcp1 (Versal)
+
+Rocelet v0.3.0, the MRMAC adapter `mac_mrmac100g`, the engine at 300 MHz, the PS DDR window on
+one 512-bit NoC port per direction.
+
+| Target | Device | LUT | FF | BRAM36 | URAM | DSP | WNS / WHS (ns) |
+|--------|--------|----:|---:|-------:|-----:|----:|---------------:|
+| `vck190_fmcp1` (MRMAC 100G RS-FEC, A72, always-on block + guard, PS DDR window on 1 + 1 NoC ports, netdev DMA channel) | XCVC1902-2 | 88,574 (9.8 %) | 119,805 (6.7 %) | 103 (10.7 %) | 16 (3.5 %) | 1,115 (56.7 %) | +0.043 / +0.012 |
+
+| Block | LUT | FF | BRAM36 | URAM | DSP |
+|---|---:|---:|---:|---:|---:|
+| `rocelet_sys_0` (engine, URAM window, self-test logic, HSB producer and sources, netdev channel) | 70,491 | 93,977 | 84 (67 + 34 x 0.5) | 16 | 1,115 |
+| `mac0` (`mac_mrmac100g`: RX packer, RX and TX FIFOs, downsizer, clock crossings) | 5,694 | 5,273 | 16 (15 + 2 x 0.5) | 0 | 0 |
+| the rest (SmartConnects, AXI DMA, AXI IIC, always-on block, clocking, resets) | 12,389 | 20,555 | 3 | 0 | 0 |
+
+| Clock | WNS (ns) | WHS (ns) |
+|-------|---------:|---------:|
+| engine clock (`clk_eng`, 300 MHz) | +0.043 | +0.015 |
+| MRMAC client clock (`clk_axis`, 390.625 MHz) | +0.051 | +0.012 |
+| `clk_gen` (200 MHz: IQ16 and beam-array generators) | +0.431 | +0.021 |
+| `clk_dma` (250 MHz: netdev DMA) | +0.785 | +0.021 |
+| `clk_sys` (100 MHz: control plane) | +4.269 | +0.030 |
+
+* The MRMAC itself, the GT quad, the NoC and the DDR controller are hard blocks and use no
+  fabric; the 100G MAC costs the 5.7k LUT of its adapter.
+* The engine and the rest of `rocelet_sys` are the same as on the other targets. The margin at
+  300 MHz is small, as on the KCU116 at 322 MHz; the implementation uses the same directives
+  (`place_design -directive ExtraTimingOpt`, `phys_opt_design`, `route_design -directive
+  AggressiveExplore`, a post-route `phys_opt_design` when needed). No critical warnings.
+* NoC quality of service: the PS DDR window's ports request 12,500 MB/s each (write / read),
+  the netdev DMA port 1,600 MB/s each way; the NoC compiler reports the requests as met.
+
+% TODO(m2): refresh the vck190_fmcp1 tables from the release build (utilisation, per-clock timing, critical warnings) and state the A72 console / roceletd sizes if relevant.
 
 ## Version 0.5.0: zcu106 and the refactored kcu116
 
@@ -191,3 +228,12 @@ limit.
 | Host to FPGA, WRITE | PS DDR window | 9.69-9.80 |
 | Host READ of the PS DDR window | PS DDR window | 9.13 |
 | HSB IQ16 frames into GPU memory, unpaced | GPU memory | 9.77 |
+
+## Measured: vck190_fmcp1 (100G)
+
+VCK190 + OP120 on FMCP1, QSFP28 port 0, 3 m passive QSFP28 DAC to an NVIDIA ConnectX-6 Dx in the
+same test host, forced to 100000, auto-negotiation off, RS-FEC, MTU 4200.
+
+% TODO(m2): link (link-up time, PCS / RS-FEC lane state, corrected / uncorrectable codewords, error counters after the sessions), self-test `t pma` / `rl t pma` result.
+% TODO(m2): RDMA at 100G: FPGA WRITE with immediate into host memory, host WRITE / SEND / READ into the URAM window, host WRITE into and READ of the PS DDR window (one direction, and both at once), PAUSE TX / RX against the ConnectX-6 Dx, FEC off at run time.
+% TODO(m3): rl0 (flood ping, TCP), HSB device mode and data plane into GPU memory at 100G, beamforming demo at 100 Gb/s, web UI.

@@ -14,6 +14,11 @@ and on the Linux image prefix every console command with `rl` (locally or over S
 `ssh amd-edf@<board> rl qp 0`; the record exchange is shown in
 [](zynqmp_linux.md#connecting-a-host-qp-records)). The ZCU106 adds memory window `mr=3`, the
 PS DDR window. Its measurements are on [](resources.md#measured-zcu106-40g-and-10g).
+
+**VCK190.** The `vck190_fmcp1` target runs at 100G with RS-FEC like the KCU116, so the host port
+settings of this page apply unchanged; the console commands are prefixed with `rl` on its Linux
+image as on the ZCU106, and memory window `mr=3` is its PS DDR window. Its measurements are on
+[](resources.md#measured-vck190_fmcp1-100g).
 ```
 
 ## 1. The host

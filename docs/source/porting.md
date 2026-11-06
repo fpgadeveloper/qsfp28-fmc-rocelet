@@ -1,11 +1,12 @@
-# Porting to other Zynq UltraScale+ and RFSoC boards
+# Porting to other boards
 
 The ZCU106 target is built so that the Zynq UltraScale+ **RFSoC** boards (ZCU111, ZCU208,
 ZCU216; also other Zynq UltraScale+ MPSoC boards with an FMC) can reuse almost all of it: the
-processing system is the same, and the MAC sits behind one generic MAC boundary. This page
-lists what is board specific and what carries over, and the steps to add a target. It is a
-checklist for a port, not a supported target: no RFSoC target is built or tested in this
-release.
+processing system is the same, and the MAC sits behind one generic MAC boundary. The VCK190
+target does the same for **Versal** boards with an MRMAC next to the FMC's transceivers
+([below](#other-versal-boards)). This page lists what is board specific and what carries over,
+and the steps to add a target. It is a checklist for a port, not a supported target: no RFSoC
+target and no other Versal board is built or tested in this release.
 
 ## The template: Board specifics
 
@@ -15,8 +16,9 @@ decides in one **Board specifics** subsection per board:
 and lane order, reference-clock pin, FMC I/O pins, PS preset and DDR map, always-on `TARGET` /
 `CAPS`, firmware block, resources and timing), the Linux page's
 [per-board defaults](zynqmp_linux.md#per-board-defaults) (BSP, host name, UART, MAC addresses,
-reserved memory, boot switch), and [KCU116](microblaze_hw.md#kcu116-kcu116) on the MicroBlaze
-page. A port fills in the same rows for the new board: each row names the file that holds the
+reserved memory, boot switch), [VCK190](versal_hw.md#vck190-vck190_fmcp1) on the Versal page
+with the Versal Linux page's [per-board defaults](versal_linux.md#per-board-defaults), and
+[KCU116](microblaze_hw.md#kcu116-kcu116) on the MicroBlaze page. A port fills in the same rows for the new board: each row names the file that holds the
 value, so the table is also the list of files to touch. Add the new board's subsection to the
 family page (and a row to the per-board defaults) together with the target.
 
@@ -27,8 +29,8 @@ family page (and a row to the per-board defaults) together with the target.
 | rocelet engine | the engine, its parameters, the width converters | `CLK_KHZ`, `LINK_GBPS`, `MAC_WIDTH` from the MAC (data.json) |
 | System logic (`rocelet_sys`) | memory windows (URAM, PS DDR with the two-port interleave), self-test logic, HSB producer and sources, netdev DMA channel, system registers | `DDR_PORTS` (bandwidth of the PS DDR window, below) |
 | Always-on block + clock guard (`rsys_aon`) | registers, guard, interrupts | nothing by hand: `bd_zynqmp.tcl` computes the `CAPS` constant (link rate, MAC width and type, port, options) from the data.json attributes and the `TARGET` id from the target label |
-| MAC block (`Vivado/src/hdl/mac/`) | `mac_cmac_adapt` (100G CMAC), `mac_omac40g` / `mac_omac10g` (omac on GTH) | which one, and its transceiver placement |
-| Block design (`Vivado/src/bd/bd_zynqmp.tcl`) | the PL side: interconnect, address map, interrupts, HP-port use | the PS configuration of the board (DDR, MIO, the GEM of the board's Ethernet port, UART: the board preset), the GT reference clock ports |
+| MAC block (`Vivado/src/hdl/mac/`) | `mac_cmac_adapt` (100G CMAC), `mac_omac40g` / `mac_omac10g` (omac on GTH), `mac_mrmac100g` (Versal MRMAC) | which one, and its transceiver placement |
+| Block design (`Vivado/src/bd/bd_zynqmp.tcl`; Versal: `bd_versal.tcl`) | the PL side: interconnect, address map, interrupts, HP-port use | the PS configuration of the board (DDR, MIO, the GEM of the board's Ethernet port, UART: the board preset), the GT reference clock ports |
 | Build script (`Vivado/scripts/build.tcl`) | the flow, the MAC selection and the GT placement from data.json | nothing: the GT channels and reference clock are data.json attributes ([below](#gt-placement-in-datajson)) |
 | Constraints (`Vivado/src/constraints/<target>.xdc`, `<target>_impl.xdc`) | the clock-crossing constraints of `rocelet_sys` and `rsys_aon` | GT reference clock pins, FMC I/O pins (I2C of the Si5328 and the QSFP28 module, module control lines), the MAC's clock constraints |
 | Firmware (`Vitis/common/src`) | the console, the self-test, the HSB device mode, the MAC backends (`mac.c`: CMAC and omac) | a branch for the board in `hw.h` (target name, MAC, MAC clock, FEC, PAUSE default, base addresses; [below](#firmware-hwh)), the Si5328 frequency (`si5328.c` has 156.25 MHz and 322.265625 MHz plans) |
@@ -45,6 +47,14 @@ them and configures the MAC's transceiver from them. No Tcl or RTL changes for a
 | `gt_channels` | all | the transceiver channel sites (`X<x>Y<y>`, as the transceiver wizard and the CMAC name them) of QSFP lanes 0, 1, 2, 3, in that order. omac_10g uses lane 0 (the first entry); omac_40g and the CMAC use all four, which must be the four channels of one quad | `["X0Y14", "X0Y13", "X0Y15", "X0Y12"]` / `["X0Y12", "X0Y13", "X0Y14", "X0Y15"]` |
 | `gt_refclk` | omac | the reference clock of the lane 0 channel as the transceiver wizard names it: `clk0` / `clk1` = `MGTREFCLK0` / `1` of its quad, `clk0+1`, `clk0-1`, `clk1+1`, `clk1-1` = of the quad above / below; default `clk0` | `clk0` (GBTCLK0 on `MGTREFCLK0` of quad 226) / – |
 | `cmac_core` | cmac | the CMAC hard block site | – / `CMACE4_X0Y0` |
+
+A Versal target with the MRMAC has its own three attributes instead of `gt_channels`:
+
+| Attribute | Meaning | VCK190 |
+|---|---|---|
+| `gt_quad` | the GTY quad of the FMC's DP0-3 (QSFP lane *n* = channel *n* of the quad; the quad is placed by its pins in the XDC) | `GTY_QUAD_X1Y1` |
+| `mrmac_core` | the MRMAC site next to that quad (`MRMAC_LOCATION_C0`) | `MRMAC_X0Y0` |
+| `gt_refclk_hz` | the GT reference clock frequency (the Si5328 plan of the firmware must match) | 322265625 |
 
 What the build makes of them:
 
@@ -69,13 +79,16 @@ same for every quad.
 
 `Vitis/common/src/hw.h` selects the target with the `BOARD_<NAME>` macro of the generated
 `board.h` (`Vitis/py/build-vitis.py` writes it from the data.json board name). It has two
-branches: `#if defined(BOARD_ZCU106)` (Cortex-A53, omac, always-on block, PS DDR window) and
-`#else`, the KCU116 (MicroBlaze, CMAC, QSFP0 GPIO). Every board that is not `BOARD_ZCU106`
-therefore builds as a KCU116 unless `hw.h` learns about it. A third board adds an
-`#elif defined(BOARD_<NAME>)` branch before the `#else`: for another omac board on the Zynq
-UltraScale+, a copy of the ZCU106 branch with its own `TARGET_NAME` (the register map, the MAC
-detection from `CAPS` and the PS DDR window carry over); for a CMAC target the values of
-step 4 below.
+branches: `#if defined(BOARD_ZCU106) || defined(BOARD_VCK190)`, the PS targets (always-on
+block, PS DDR window), with a ZCU106 part (Cortex-A53, omac) and a VCK190 part (Cortex-A72,
+MRMAC, VADJ, eFUSE DNA); and `#else`, the KCU116 (MicroBlaze, CMAC, QSFP0 GPIO). Every board
+that is neither therefore builds as a KCU116 unless `hw.h` learns about it. A new board adds
+itself to the PS condition with a part of its own: for another omac board on the Zynq
+UltraScale+, a copy of the ZCU106 part with its own `TARGET_NAME` (the register map, the MAC
+detection from `CAPS` and the PS DDR window carry over); for another Versal board, a copy of
+the VCK190 part; for a CMAC target the values of step 4 below. The platform layer
+(`plat.c`) and the VADJ code (`vadj.c`) select the VCK190's A72 specifics with the same
+macro.
 
 ## Which MAC
 
@@ -152,3 +165,38 @@ pairs; the channel indices 0-3 are the same in every quad), add the board's bran
 ([](#firmware-hwh)), and set the polarity inputs of `mac_omac40g` if the board swaps a lane's
 P/N ([omac GTH wrapper documentation](https://omac.ethernetfmc.com/en/latest/gt_usp_gth.html)).
 On a GTY device (RFSoC) omac needs a GTY wrapper, which is planned in the omac repository.
+
+## Other Versal boards
+
+The VCK190 target's block design (`bd_versal.tcl`) is written for any Versal board whose FMC
+carries the 2x QSFP28 FMC on four GTY channels of one quad next to an MRMAC. AMD's VMK180 has
+the VCK190's FMC and VADJ arrangement; the FPGA board catalog also lists the OP120 as
+mating with the VPK120, VHK158 and VEK280. Check the MRMAC next to the FMC's quad in the
+device's documentation before starting: not every Versal device has MRMACs, and their sites
+differ. Steps:
+
+1. **Manifest.** Copy the `vck190_fmcp1` entry of `config/data.json`: `label`, `board`,
+   `connector`, `gt_quad`, `mrmac_core`, `gt_refclk_hz` ([](#gt-placement-in-datajson)),
+   `license` true if the device needs Vivado Enterprise, `ip_license` true (the MRMAC key); then
+   `python3 config/update.py`.
+2. **Block design.** The CIPS of `bd_versal.tcl` is configured for the VCK190 (board preset,
+   MIO, the GEM of the board's RJ45, SD, I2C, the DDR4 controller on the NoC): give the new
+   board its own CIPS and NoC configuration. The PL side (always-on block, rocelet_sys, the
+   adapter, the NoC ports of the PS DDR window and the DMA, the address map) carries over.
+3. **Constraints.** `<target>.xdc` with the GT reference clock pin, the lane pins (they place
+   the quad) and the FMC pins at the board's VADJ I/O standard; `<target>_impl.xdc` from
+   `vck190_fmcp1_impl.xdc` (clock names are those of the block design, no board values).
+4. **VADJ.** If the board, like the VCK190, leaves the FMC's VADJ rail off, switch it on in
+   U-Boot (a bootcmd fragment in the BSP) and in `vadj.c` for the bare-metal console and
+   `roceletd`; the regulator and its I2C path are board specific.
+5. **Firmware.** A part in `hw.h` ([](#firmware-hwh)) and the board's cases in `plat.c` /
+   `vadj.c`.
+6. **Linux.** Copy `Yocto/bsp/vck190_fmcp1` and adjust the device tree: the Ethernet PHYs and
+   MAC addresses of the board, the reserved-memory region (inside the DDR range that the
+   engine's 40-bit DDR masters reach), the I2C bus of the VADJ regulator.
+7. **Validate.** Build, run `rl t pma`, then link to the host NIC at 100G with RS-FEC
+   ([](hardware_test.md)).
+
+The second QSFP28 port of the OP120 reaches its own MRMAC on the VCK190 (FMCP1 DP4-7 = quad
+X1Y2, next to MRMAC_X0Y2): the design keeps those lanes free and the port's module lines held,
+so a second 100G port is an extension of the same block design.

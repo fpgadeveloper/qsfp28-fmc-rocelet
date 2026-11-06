@@ -1,8 +1,10 @@
 # Console
 
-The console application (`Vitis/common/src/`) runs on the KCU116's MicroBlaze and, built for the
-Cortex-A53, on the ZCU106 (bare metal, or inside the Linux daemon as `rl <command>`); the
-differences of the ZCU106 are in [the last section](#zynq-ultrascale-cortex-a53-bare-metal-console). On
+The console application (`Vitis/common/src/`) runs on the KCU116's MicroBlaze, built for the
+Cortex-A53 on the ZCU106 and for the Cortex-A72 on the VCK190 (bare metal, or inside the Linux
+daemon as `rl <command>`); the differences of the ZCU106 and the VCK190 are in the last two
+sections ([ZCU106](#zynq-ultrascale-cortex-a53-bare-metal-console),
+[VCK190](#versal-cortex-a72-bare-metal-console)). On
 the KCU116 it offers a console on the board's USB-UART at **115200 baud, 8N1**. At power-up it programs the Si5328 (GT reference clock 322.265625 MHz),
 brings up the CMAC (RS-FEC on), configures the engine for loopback (see below) and prints the
 status. Commands that need the engine are refused while the CMAC user clock is stopped (only
@@ -18,9 +20,9 @@ command) prints the command list.
 | `fec 0\|1` | RS-FEC off / on, then relink (the host must use the same setting) |
 | `loop off\|pcs\|pma` | GT near-end loopback (PCS or PMA) or none, then relink |
 | `link` | reset the CMAC and wait for the link |
-| `pause [rx 0\|1] [tx 0\|1] [xoff n] [xon n] [quanta n] [refresh n]` | 802.3x PAUSE: honour received PAUSE frames (rx), send PAUSE from the RX FIFO level (tx; XOFF / XON levels in 64-byte beats of the 512-beat RX FIFO, default 128 / 64); default off on the KCU116, **PAUSE TX on (rx off) on the ZCU106**. The host's link pause must match (`ethtool -A <if> rx on tx on`) |
+| `pause [rx 0\|1] [tx 0\|1] [xoff n] [xon n] [quanta n] [refresh n]` | 802.3x PAUSE: honour received PAUSE frames (rx), send PAUSE from the RX FIFO level (tx; XOFF / XON levels in 64-byte beats of the 512-beat RX FIFO, default 128 / 64); default off on the KCU116, **PAUSE TX on (rx off) on the ZCU106 and the VCK190**. The host's link pause must match (`ethtool -A <if> rx on tx on`) |
 | `vlan rx 0\|1`, `vlan tx 0\|1 [pcp] [vid]` | accept 802.1Q VID-0 priority tags (default on); tag the frames sent (default off: only for a host whose QP is tagged too; a NIC may drop tagged RoCE frames on an untagged QP) |
-| `ip <a.b.c.d>`, `mac <12 hex digits>` | the FPGA's address (the bare-metal consoles' defaults are 192.168.20.2 and 02:0a:35:72:6c:01; on the ZCU106 Linux image the engine takes the address and MAC of `rl0`, and `ip` / `mac` change `rl0`, [](zynqmp_linux.md#rl0-and-the-engine-share-one-address)). `mac` also clears the counters and the error latch and turns the requester rate limit off (`pace 0`, burst 16 KB); the other engine settings stay (`setup` restores them all) |
+| `ip <a.b.c.d>`, `mac <12 hex digits>` | the FPGA's address (the bare-metal consoles' defaults are 192.168.20.2 and 02:0a:35:72:6c:01; on the ZCU106 and VCK190 Linux images the engine takes the address and MAC of `rl0`, and `ip` / `mac` change `rl0`, [](zynqmp_linux.md#rl0-and-the-engine-share-one-address)). `mac` also clears the counters and the error latch and turns the requester rate limit off (`pace 0`, burst 16 KB); the other engine settings stay (`setup` restores them all) |
 | `to <us>` | requester ACK timeout (default 5 ms, rocelet's reset value since v0.2.1; with the retry count 7 a QP gives up after 8 timeouts in a row = 40 ms without an ACK while the link is up, which covers a ConnectX-6 that goes silent 15-25 ms before the FPGA loses alignment when the host reconfigures its port). 0 to 1,048,575 us (20-bit register); a larger value is refused with an error message and the setting is not changed. `setup` and the tests put it back to 5 ms |
 | `grace [us]` | how long the requester's ACK timeouts stay held after the link comes back (rocelet `LINK_GRACE`, timer ticks = microseconds; 0 to 16,777,215, i.e. up to 16.7 s; 0 = no grace; default 2,000,000 = 2 s; a larger value is refused with an error message and the setting is not changed). Without an argument: the value, the link and hold state, link drops and ACK timeouts. `setup` and the tests keep the value set here |
 | `pace <Gb/s> [burst]` | requester rate limit over all QPs (rocelet `PACE_RATE` / `PACE_BURST`; wire bytes = payload + 98 per packet; 0 = off, the default) |
@@ -182,3 +184,33 @@ GTH (prints "GTH ready: MAC clock 156250 kHz"), releases the MAC and waits for t
 host port must be forced to 40 Gb/s (10 Gb/s with the 10G option) with auto-negotiation and
 FEC off (the console prints the `ethtool` lines for the speed of the bitstream). `wg` rates:
 `gap = len x 8 / rate x 156.25e6` clocks at both speeds.
+
+## Versal (Cortex-A72 bare-metal console)
+
+The same sources build a Cortex-A72 standalone console for the `vck190_fmcp1` target (100G,
+MRMAC), with the A72 case of the platform layer (`plat.c`: console UART, time base, the FMC VADJ
+rail over the PS I2C, the device DNA from the eFUSE cache) and the MRMAC backend of `mac.c`.
+`roceletd` runs the same code on the VCK190's Linux image ([](versal_linux.md)), so every
+command below also works as `rl <command>`. The PS DDR window commands (`ddr`, `ddr fill`,
+`ddr check`) are those of the Zynq UltraScale+ section.
+
+| | Zynq UltraScale+ (`zcu106`) | Versal (`vck190_fmcp1`) |
+|---|---|---|
+| CPU, console | Cortex-A53 #0, PS UART0 (CP2108 port 0), 115200 8N1 | Cortex-A72 #0, PS UART0 (the FT4232H's second port), 115200 8N1 |
+| Boot | `BOOT.BIN` (FSBL + bitstream + console) from SD, or over JTAG | `BOOT.BIN` (device image with the PLM + console) from SD, or over JTAG ([](getting_started.md#run-the-bare-metal-console-1)) |
+| Before the MAC | | switches the FMC's VADJ rail on (1.5 V; prints `VADJ_FMC on`), as U-Boot does for Linux |
+| MAC, link | omac_40g 40GBASE-R4 (10G option: omac_10g); no FEC | the hard MRMAC, 100GBASE-R4 with **RS-FEC on by default** (`fec 0` / `fec 1`, then relink; the host port must match) |
+| GT reference clock | Si5328 156.25 MHz | Si5328 322.265625 MHz |
+| Loopback | `loop pma` (`pcs` selects PMA too) | `loop pma` / `loop pcs` (GTY near-end PMA / PCS, applied with a GT reset) |
+| MAC control and status | the always-on block; at 40G a lane line | the always-on block for resets and link, the MRMAC's own registers for its configuration; `st` and every link attempt print the MRMAC line: PCS lanes 0-19 block lock, RS-FEC lane lock 0-3, alignment and lane mapping, the MRMAC's RX and FEC status, adapter RX overflows; the RS-FEC corrected / uncorrectable codeword counters |
+| Clock in `st` | `MAC clock 156250 kHz` (the GT user clock, stops while the GT is in reset) | `engine clock 300000 kHz` (free-running) |
+| Engine settings | `CTRL.PAUSE_RX_LEVEL` = 1, `PAUSE_QCLK` 512 / 2048, `TICK_DIV` 156 | `CTRL.PAUSE_RX_LEVEL` = 0 (the MRMAC reports a received PAUSE as a pulse with its quanta, as the CMAC), `PAUSE_QCLK` at its reset value for 100G, `TICK_DIV` 300 |
+| PAUSE | **PAUSE TX on after boot**, PAUSE RX off | the same |
+| Extra memory window | `mr=3`: a 1 MB buffer in PS DDR (Linux: the 256 MB reserved region) | the same; the buffer lies in the DDR4's low 2 GB, which the engine's DDR masters reach |
+| HSB serial number | from the PL's device DNA (96 bits) | from the device DNA in the eFUSE cache (128 bits) |
+
+At power-up the console holds the GT quad and the MRMAC in reset, switches VADJ on, programs
+the Si5328, releases the GT (prints "GTY quad ready: engine clock 300000 kHz"), configures and
+releases the MRMAC and waits for the link. It prints the host's `ethtool` lines: 100 Gb/s,
+auto-negotiation off, FEC RS (`encoding off` on the host after `fec 0` here). `wg` rates:
+`gap = len x 8 / rate x 300e6` clocks.

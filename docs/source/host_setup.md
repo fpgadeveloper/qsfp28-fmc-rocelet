@@ -2,8 +2,8 @@
 
 This page takes a PC from a bare install to the [beamforming demo](beam_demo.md) running on a
 monitor: the hardware the host needs, the operating system and drivers, Docker and NVIDIA's
-Holoscan Sensor Bridge (HSB) container, the port that faces the board (100G for the KCU116, 40G
-for the ZCU106), the display session
+Holoscan Sensor Bridge (HSB) container, the port that faces the board (100G for the KCU116 and
+the VCK190, 40G for the ZCU106), the display session
 for the window, and the order in which board and host are started. The board side (build,
 programming, console) is in [](getting_started.md).
 
@@ -145,7 +145,8 @@ docker run --rm hololink-demo:3.0.0 pip3 show holoscan-cu13 hololink cupy-cuda13
 
 The FPGA's MACs do not auto-negotiate, so the host port runs with fixed settings, at the speed
 of the board's target. Use an isolated point-to-point link: never put this port on a LAN or
-behind a router. The table gives the KCU116 (100G) values; the ZCU106 differences follow it.
+behind a router. The table gives the 100G values of the KCU116 and the VCK190 (both 100GBASE-R
+with RS-FEC); the ZCU106 differences follow it.
 
 | Setting | Value | Command (runtime) |
 |---|---|---|
@@ -238,7 +239,7 @@ file as above works with `renderer: NetworkManager` under `ethernets:`.
 | host | `ip -br addr show <if>` | `UP` with `192.168.20.1/24` |
 | host | `rdma link show`, `ibv_devinfo -d <rdma-dev>` | the port `ACTIVE`, `active_mtu: 4096 (5)` |
 | host | `ping -c 3 192.168.20.2` | replies (the FPGA answers ARP and ICMP echo) |
-| board console | power-up banner, `st` | `Port 0: link up, 100 Gb/s, RS-FEC on`; `st` shows the link and the engine's counters |
+| board console | power-up banner, `st` | `Port 0: link up, 100 Gb/s, RS-FEC on`; `st` shows the link and the engine's counters (on the VCK190 Linux image: `rl st`) |
 
 On the ZCU106: `ethtool <if>` shows `Speed: 40000Mb/s`, `ethtool --show-fec <if>` `Active FEC
 encoding: Off`, and on the board `rl st` (Linux) or `st` (bare metal) shows the link up at

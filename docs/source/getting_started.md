@@ -2,14 +2,14 @@
 
 ## What you need
 
-| | `kcu116` (100G) | `zcu106` (40G; 10G option) |
-|---|---|---|
-| Board | [KCU116](https://www.xilinx.com/kcu116) evaluation board | [ZCU106](https://www.xilinx.com/zcu106) evaluation board |
-| FMC | Opsero [2x QSFP28 FMC] (OP120) on the HPC connector; the KCU116 routes the lanes of **QSFP28 port 0** only | Opsero [2x QSFP28 FMC] (OP120) on **HPC0**; the design uses **QSFP28 port 0** |
-| Self-test | nothing else (the GT near-end loopback is used), or a QSFP28 loopback plug in port 0 | the same |
-| RDMA with a host | a 100G QSFP28 cable (DAC or AOC) from port 0 to a RoCE v2 NIC | a QSFP28 or QSFP+ direct-attach cable from port 0 to a RoCE v2 NIC that does **40GBASE-CR4** (validated: NVIDIA ConnectX-6 Dx) |
-| Board I/O | USB-UART and USB-JTAG | USB-UART; an SD card of 16 GB or more (the image is 8 GiB + 16 KiB, more than an 8 GB card holds); the board's RJ45 on your LAN for SSH and the web UI; USB-JTAG for the JTAG boot |
-| Tools | Vivado and Vitis 2025.2 on Linux or Windows, with the no-cost license of the CMAC IP | Vivado and Vitis 2025.2 (no IP license); for the Linux image a Linux build host (AMD EDF Yocto 2025.2, about 60 GB of disk) |
+| | `kcu116` (100G) | `zcu106` (40G; 10G option) | `vck190_fmcp1` (100G) |
+|---|---|---|---|
+| Board | [KCU116](https://www.xilinx.com/kcu116) evaluation board | [ZCU106](https://www.xilinx.com/zcu106) evaluation board | [VCK190](https://www.xilinx.com/vck190) evaluation board |
+| FMC | Opsero [2x QSFP28 FMC] (OP120) on the HPC connector; the KCU116 routes the lanes of **QSFP28 port 0** only | Opsero [2x QSFP28 FMC] (OP120) on **HPC0**; the design uses **QSFP28 port 0** | Opsero [2x QSFP28 FMC] (OP120) on **FMCP1**; the design uses **QSFP28 port 0** |
+| Self-test | nothing else (the GT near-end loopback is used), or a QSFP28 loopback plug in port 0 | the same | the same |
+| RDMA with a host | a 100G QSFP28 cable (DAC or AOC) from port 0 to a RoCE v2 NIC | a QSFP28 or QSFP+ direct-attach cable from port 0 to a RoCE v2 NIC that does **40GBASE-CR4** (validated: NVIDIA ConnectX-6 Dx) | a 100G QSFP28 cable (DAC or AOC) from port 0 to a RoCE v2 NIC with RS-FEC |
+| Board I/O | USB-UART and USB-JTAG | USB-UART; an SD card of 16 GB or more (the image is 8 GiB + 16 KiB, more than an 8 GB card holds); the board's RJ45 on your LAN for SSH and the web UI; USB-JTAG for the JTAG boot | the board's USB port (UART and JTAG through one FT4232H); a microSD card of 16 GB or more; GEM0's RJ45 (next to the USB connectors) on your LAN for SSH and the web UI |
+| Tools | Vivado and Vitis 2025.2 on Linux or Windows, with the no-cost license of the CMAC IP | Vivado and Vitis 2025.2 (no IP license); for the Linux image a Linux build host (AMD EDF Yocto 2025.2, about 60 GB of disk) | Vivado **Enterprise** and Vitis 2025.2, with the no-cost license of the MRMAC IP ([licensing](index.md#licensing)); for the Linux image a Linux build host (AMD EDF Yocto 2025.2, about 60 GB of disk) |
 
 For the host side, the host helper `rocelet_host` (rocelet repository) and, for the
 [beamforming demo](beam_demo.md), an NVIDIA GPU, Docker with NVIDIA's Holoscan Sensor Bridge
@@ -118,13 +118,85 @@ Open the console on the USB-UART at **115200 baud, 8N1**; the banner shows the M
 (`omac_40g 40 Gb/s`), the clock bring-up and the link, then the prompt `rl>`. The commands are
 those of [](console.md) (ZCU106 differences in its last section).
 
+## VCK190
+
+The VCK190 target has the same two ways to run as the ZCU106: the **Linux image** (daemon,
+command line, web UI, the `rl0` network interface) on the Cortex-A72, and a **bare-metal
+console** on the Cortex-A72. Both run the same device image. Building it needs Vivado
+Enterprise and the MRMAC license ([licensing](index.md#licensing)).
+
+### Build
+
+```
+./build.sh all --target vck190_fmcp1          # Linux build host: device image, bare-metal console, Linux image
+./build.sh xsa --target vck190_fmcp1          # the hardware only (Linux or Windows)
+./build.sh standalone --target vck190_fmcp1   # the bare-metal console BOOT.BIN (Linux or Windows)
+./build.sh yocto --target vck190_fmcp1        # the Linux image (Linux only; builds the XSA first if needed)
+```
+
+The Vivado stage builds the block design and the device image (`Vivado/vck190_fmcp1/`, the
+XSA with the PDI); `standalone` builds the A72 console and `Vitis/boot/vck190_fmcp1/BOOT.BIN`
+(the device image with the PLM, then the console; Versal has no FSBL); `yocto` builds the AMD
+EDF image in `Yocto/vck190_fmcp1/images/linux/`. The boot files are zipped into
+`bootimages/qsfp28-fmc-rocelet_vck190_fmcp1_standalone-2025-2.zip` and
+`bootimages/qsfp28-fmc-rocelet_vck190_fmcp1_yocto-2025-2.zip`.
+
+### Run Linux (SD card)
+
+1. Write the image to the microSD card's raw device, then copy `BOOT.BIN` to its first (FAT)
+   partition and `BOOTAA64.EFI` (in the Yocto zip) to `EFI/BOOT/` on the same partition; the
+   image alone does not boot ([details](versal_linux.md#build-and-boot)):
+
+   ```
+   bmaptool copy rootfs.wic.xz /dev/sdX
+   sudo mount /dev/sdX1 /mnt && sudo cp BOOT.BIN /mnt/ \
+     && sudo mkdir -p /mnt/EFI/BOOT && sudo cp BOOTAA64.EFI /mnt/EFI/BOOT/ && sudo umount /mnt
+   ```
+
+2. Fit the FMC on FMCP1, set the VCK190 to SD boot (boot-mode switch **SW1 = 1000**: 1 ON,
+   2-4 OFF), insert the card into the Versal's boot microSD slot (the other microSD slot
+   belongs to the system controller), connect the USB port (the console is the second serial
+   port of the FT4232H, 115200 8N1) and GEM0's RJ45 to your LAN, and power on.
+3. Log in as `amd-edf` on the UART (a password is set at the first login), or over SSH once the
+   board has its LAN address (DHCP on GEM0).
+4. U-Boot switches the FMC's VADJ rail on; at boot the daemon `roceletd` programs the FMC's
+   clock, brings up the MRMAC with RS-FEC and waits for the link; `journalctl -u roceletd` shows
+   the bring-up and `rl st` the status. The web UI is at `http://<board>/`.
+
+[](versal_linux.md) lists what is specific to the Versal image; the Linux stack itself is
+described on [](zynqmp_linux.md).
+
+### Run the bare-metal console
+
+* **From SD:** copy `BOOT.BIN` of the standalone zip (or `Vitis/boot/vck190_fmcp1/`) to the
+  first (FAT) partition of a microSD card (nothing else is needed), set SW1 = 1000 and power on.
+* **Over JTAG:** set SW1 to JTAG boot (SW1 = 1111) and either load the same `BOOT.BIN` with
+  `xsdb` (part of Vitis):
+
+  ```
+  xsdb% connect
+  xsdb% targets -set -filter {name =~ "Versal*"}
+  xsdb% device program Vitis/boot/vck190_fmcp1/BOOT.BIN
+  ```
+
+  or open the `Vitis/vck190_fmcp1_workspace` workspace in the Vitis IDE and run the
+  `rocelet_console` application on the hardware.
+
+The console switches the FMC's VADJ rail on itself, so the bare-metal boot needs no U-Boot.
+Open the console at **115200 baud, 8N1**; the banner shows VADJ, the Si5328 at 322.265625 MHz,
+the GT quad and the engine clock, the MRMAC link with RS-FEC, then the prompt `rl>`. The
+commands are those of [](console.md) (VCK190 differences in
+[its own section](console.md#versal-cortex-a72-bare-metal-console)).
+
+% TODO(m2): check the bare-metal banner text and the xsdb JTAG recipe on the VCK190.
+
 ## Self-test
 
 The built-in self-test needs no cable, no plug and no host: it runs in the GT near-end
 loopback and puts the link back afterwards (a cable to a NIC may stay connected; the NIC sees
-two short link drops). On the KCU116 and the ZCU106 bare-metal console type `t pma` at the
-`rl>` prompt; on the ZCU106 Linux image run `rl t pma` (also over SSH: the exit status is 0 on
-PASS):
+two short link drops). On the KCU116 and the ZCU106 / VCK190 bare-metal consoles type `t pma`
+at the `rl>` prompt; on the ZCU106 and VCK190 Linux images run `rl t pma` (also over SSH: the
+exit status is 0 on PASS):
 
 ```
 rl> t pma
@@ -135,7 +207,8 @@ TEST loopback path (the FPGA's frames come back): PASS
 SELFTEST PASS 19/19 loop=pma fec=1 selftest_logic=1
 ```
 
-(`fec=0` on the ZCU106: its 40G and 10G links have no FEC.) `t full pma` adds throughput and
+(`fec=0` on the ZCU106: its 40G and 10G links have no FEC; `fec=1` on the KCU116 and the
+VCK190.) `t full pma` adds throughput and
 latency through the engine's own responder. Every test prints a `TEST <name>: PASS|FAIL` line,
 and the run ends with one `SELFTEST PASS|FAIL <passed>/<run>` line. With a QSFP28 loopback plug
 in port 0, plain `t` works as well. In the GT loopback the frames are still transmitted on the
@@ -148,7 +221,7 @@ board's speed:
 
 | Target | Host port |
 |---|---|
-| `kcu116` | 100G, auto-negotiation off, RS-FEC (the ConnectX-6 Dx's FEC `Auto` resolves to RS) |
+| `kcu116`, `vck190_fmcp1` | 100G, auto-negotiation off, RS-FEC (the ConnectX-6 Dx's FEC `Auto` resolves to RS) |
 | `zcu106` | **40G, auto-negotiation off, FEC off**: `sudo ethtool -s <if> speed 40000 duplex full autoneg off` and `sudo ethtool --set-fec <if> encoding off` |
 | `zcu106`, 10G option | 10G, auto-negotiation off, FEC off (`speed 10000`) |
 
@@ -174,7 +247,7 @@ $ rocelet_host run --dev rocep179s0f0 --role sink --op write_imm --len 65536 --c
 rl> wg write_imm 65536 100000             # line-rate WRITE with immediate into host memory
 ```
 
-On the ZCU106 Linux image the same lines go through SSH (`ssh amd-edf@<board> rl qp 0`,
+On the ZCU106 and VCK190 Linux images the same lines go through SSH (`ssh amd-edf@<board> rl qp 0`,
 `ssh amd-edf@<board> rl RLH ...`) or the web UI; see
 [](zynqmp_linux.md#connecting-a-host-qp-records).
 

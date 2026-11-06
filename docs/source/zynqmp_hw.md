@@ -91,7 +91,7 @@ The forwarded path costs about 25 pl_clk0 cycles per access (two toggle synchron
 | 0x04 | `VERSION` | RO | `0x00010000` (1.0) |
 | 0x08 | `BUILD_ID` | RO | build time, Unix seconds (set when the block design is made) |
 | 0x0C | `TARGET` | RO | target id, 4 ASCII characters made from the target label (`zcu` → `Z`, first four characters, upper case; see [Board specifics](#board-specifics)) |
-| 0x10 | `CAPS` | RO | [7:0] link Gb/s (10 / 40) [15:8] MAC AXI-Stream width / 8 (8 = 64 bits, 32 = 256 bits) [19:16] MAC type (1 CMAC, 2 omac_10g, 3 omac_40g) [23:20] QSFP port (0) [24] PS DDR window [25] netdev DMA channel [26] clock guard. omac_40g on port 0 with both options: `0x07032028`; omac_10g: `0x0702080A`. Software reads the MAC type and the link speed here (one console binary serves every MAC) |
+| 0x10 | `CAPS` | RO | [7:0] link Gb/s (10 / 40) [15:8] MAC AXI-Stream width / 8 (8 = 64 bits, 32 = 256 bits) [19:16] MAC type (1 CMAC, 2 omac_10g, 3 omac_40g, 4 MRMAC on the [Versal design](versal_hw.md)) [23:20] QSFP port (0) [24] PS DDR window [25] netdev DMA channel [26] clock guard. omac_40g on port 0 with both options: `0x07032028`; omac_10g: `0x0702080A`. Software reads the MAC type and the link speed here (one console binary serves every MAC) |
 | 0x14 | `MAC_KHZ` | RO | measured MAC clock, kHz (over 1 ms; 0 = stopped). 156250 with omac_10g and omac_40g |
 | 0x18 | `PL_KHZ` | RO | 100000 (the pl_clk0 the block was built for) |
 | 0x1C | `TIME_US` | RO | free-running microseconds (pl_clk0), wraps after 71 min |

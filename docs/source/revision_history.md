@@ -1,5 +1,54 @@
 # Revision history
 
+## 2025.2 — version 0.6.0, VCK190 target
+
+% TODO(m2): confirm the version number and add the release date to the heading.
+
+A third target, **`vck190_fmcp1`**: the VCK190 with the 2x QSFP28 FMC (OP120) on FMCP1, QSFP28
+port 0 at **100 Gb/s with RS-FEC**, built for the Versal device: the same system shell and
+software as the ZCU106 target (register map, always-on block, Linux stack, bare-metal console)
+on the Cortex-A72, with the Versal hard blocks where they do better. The rocelet engine
+(v0.3.0) is unchanged.
+
+### Changes
+
+* **vck190_fmcp1 hardware** ([](versal_hw.md)): the Versal **MRMAC** hard block as the MAC
+  (1x100GE CAUI-4, RS-FEC RS(528,514), 384-bit client at 390.625 MHz) on GTY quad X1Y1, with the
+  new adapter **`mac_mrmac100g`** (RX packer and asynchronous FIFO with whole-frame drop
+  accounting, store-and-forward TX packet FIFO and 64 → 48-byte downsizer, every clock
+  crossing; MIT, XPM only) behind the generic MAC boundary; the engine on a **free-running
+  300 MHz clock** of its own; the **PS DDR window over one 512-bit NoC port per direction**
+  (no interleaver); the netdev AXI DMA with 64-bit addresses on its own NoC port; the
+  always-on block reports MAC type 4 (MRMAC) and the MRMAC's lane state; QSFP28 port 1 reserved.
+  New block design `bd_versal.tcl`, constraints `vck190_fmcp1.xdc` / `_impl.xdc`.
+* **Firmware**: an MRMAC backend in `mac.c` (mode, RS-FEC, MTU, PAUSE and frame recognition
+  through the MRMAC's registers; the GT loopback through the quad), the Cortex-A72 platform
+  case, the FMC **VADJ** enable (`vadj.c`, console and `roceletd`), the device DNA from the
+  PMC's eFUSE cache for the HSB serial number; the KCU116 MicroBlaze image keeps its size
+  (the Versal code is not built for it).
+* **Linux** ([](versal_linux.md)): an AMD EDF (Yocto 2025.2) BSP for the VCK190 (GEM0 / GEM1
+  PHY fix, fixed MACs, the reserved memory and UIO nodes, the MRMAC as UIO device
+  `rocelet-mrmac`, 64-bit DMA addressing, the U-Boot VADJ fragment); `roceletd` maps further
+  register blocks (`extra_uio`).
+* **Simulation**: `run_xsim_mrmac.sh`, a self-checking testbench of the MRMAC adapter.
+* **Docs**: the Versal pages [](versal_hw.md) (with the generated block diagram
+  `rocelet-versal-block.png`) and [](versal_linux.md); the VCK190 in getting started, host
+  setup, console, HSB, the beamforming demo, resources and porting (other Versal boards).
+
+% TODO(m2): "Measured" subsection (link, self-test, RDMA rates into URAM and the PS DDR window, PAUSE, FEC) and "Resources and timing" from the release build.
+
+### Limitations
+
+* **vck190_fmcp1**: building it needs Vivado Enterprise (the XCVC1902 is not in the Standard
+  edition) and the no-cost MRMAC license. OP120 port 1 is not used.
+* The PS DDR window carries one direction at 100G; both directions at once share the DDR4
+  memory with Linux and do not reach line rate in both directions
+  ([](versal_hw.md#bandwidth-of-the-ps-ddr-window)).
+* The beamforming demo names the board from `LINK_GBPS`, which is 100 on both the KCU116 and the
+  VCK190: start it with `--board VCK190`.
+
+% TODO(m2): further limitations found on hardware (e.g. FEC off at run time, PAUSE).
+
 ## 2025.2 — version 0.5.0 (2026-11-05), ZCU106 target
 
 A second target, **`zcu106`**: the ZCU106 with the 2x QSFP28 FMC (OP120) on HPC0, QSFP28 port 0

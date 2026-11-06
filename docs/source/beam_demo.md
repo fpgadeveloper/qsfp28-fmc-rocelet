@@ -6,7 +6,7 @@ to an NVIDIA ConnectX-6 Dx in the test host (Lenovo P520, RTX PRO 4000 Blackwell
 container), window on a monitor attached to the GPU. Every frame compared against the
 bit-exact model at 10, 40, 64 and 80 Gb/s with 0 mismatches; 20-minute soak at 64 Gb/s with 0
 frames lost. Since version 0.5.0 it also runs with the ZCU106 target at up to 40 Gb/s (the
-link's rate, read from the board). Measurements and limits: [Measured](#measured) and
+link's rate, read from the board); the VCK190 target streams at 100G like the KCU116. Measurements and limits: [Measured](#measured) and
 [Known limits](#known-limits).
 ```
 
@@ -103,8 +103,9 @@ maps use one frame (no averaging); the spectrum display is smoothed (`--spec-avg
 
 The application opens one 1920 x 1080 window, fullscreen (`--windowed` for a window). Its header
 (and the page's) names the source: `ZCU106 -> 40G RoCE -> GPU` or `KCU116 -> 100G RoCE -> GPU`,
-from the board's HSB register `LINK_GBPS` (`--board` names a ported board; `FPGA -> RoCE -> GPU`
-when the register cannot be read):
+from the board's HSB register `LINK_GBPS` (`--board` names a ported board, and the VCK190:
+`LINK_GBPS` 100 names the KCU116 by default, so start the demo with `--board VCK190` for a
+`VCK190 -> 100G RoCE -> GPU` header; `FPGA -> RoCE -> GPU` when the register cannot be read):
 
 * **Sky map** (left, large): the power map over the unit disc, title CONVENTIONAL (Bartlett,
   "power 0 .. -40 dB re peak") or MVDR ("power -10 .. -40 dB re element power"). Markers sit at the true source positions of the frame's
@@ -303,7 +304,10 @@ What is needed:
   `Vitis/boot/kcu116/rocelet_boot.bit`), QSFP28 port 0 connected to the host's 100G port as in
   [](hsb.md#quick-start). Or, since version 0.5.0, the **ZCU106** + 2x QSFP28 FMC (Linux image
   or bare-metal console) with port 0 connected to the host's port at 40G: the demo then runs at
-  up to 40 Gb/s (start it with `rl hsb on` on the board, over SSH).
+  up to 40 Gb/s (start it with `rl hsb on` on the board, over SSH). Or the **VCK190** + 2x
+  QSFP28 FMC on FMCP1 (Linux image or bare-metal console) with port 0 connected to the host's
+  100G port: the same rate range as the KCU116 (`rl hsb on` on the board, `--board VCK190` on
+  the host).
 * The host: a RoCE v2 NIC that writes into GPU memory (validated: ConnectX-6 Dx), an NVIDIA GPU,
   NVIDIA's HSB 3.0.0 container (`hololink-demo:3.0.0`: Holoscan 4.4, hololink 3.0.0, CuPy; no
   extra packages), and for the window a monitor on the GPU with the full NVIDIA display driver
@@ -374,7 +378,7 @@ Useful options:
 | `--windowed` | a 1920 x 1080 window instead of fullscreen |
 | `--fps`, `--update-hz`, `--attract-idle` | frames beamformed per second (default 60; the others are counted), scene writes per second (20), seconds before attract mode (10, 0 = never) |
 | `--script "t cmd args; ..."` or `@file` | replayed input (key, move, press / release, drag, scroll, elem, quit) through the same handlers: unattended tests |
-| `--board NAME` | board name in the window header and on the page (default: from `LINK_GBPS`, 100 KCU116, 40 / 10 ZCU106) |
+| `--board NAME` | board name in the window header and on the page (default: from `LINK_GBPS`, 100 KCU116, 40 / 10 ZCU106; `--board VCK190` for the VCK190) |
 | `--reg-mode block\|single` | one block write per scene change (default) or one register write per word |
 | `--source synthetic\|csynthetic` | no board: frames from the numpy model (~10 frames/s) or the same generator as a CUDA kernel (~50-60 shown/s) |
 
@@ -493,6 +497,8 @@ about 38.8 Gb/s at the 40 Gb/s step, followed the keys 40 → 20 → 10 → 20 �
 40 refused), and the page's `rate gbps=64` / `gbps=0.5` requests were clamped to 40 / 1; all
 1,652 frames shown, 150 frames verified bit-exact, 0 lost. The rest of this section was
 measured with the KCU116 at 100G.
+
+% TODO(m3): beamforming demo on the VCK190 at 100G (rate steps, frames verified / lost), and whether the host software should name the VCK190 itself instead of --board.
 
 Board: KCU116 + OP120 port 0, 3 m DAC, RS-FEC, MTU 4200, to a ConnectX-6 Dx (port 1, forced
 100G) in a Lenovo P520 (Xeon Skylake-SP, PCIe Gen3) with an RTX PRO 4000 Blackwell; HSB 3.0.0
