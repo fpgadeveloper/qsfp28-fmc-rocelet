@@ -70,7 +70,8 @@
 #else
 #define MRMAC_BASE     0x80130000u         /* bd_versal.tcl: mrmac_0/s_axi, 64 KB */
 #endif
-#define VADJ_IIC_BASE  0xFF020000u         /* LPD I2C0 (PMC MIO 46/47): TCA9548 0x74 -> IR38164 0x1E */
+#define HAS_VADJ       1                   /* FMC VADJ switched on by software (plat_vadj_on, vadj.c) */
+#define HAS_PLAT_DNA   1                   /* no DNA port in the PL: the PMC's DNA (plat_dna) */
 #endif
 /* PAUSE TX (802.3x frames from the engine's RX FIFO level) on after boot: a point-to-point link
  * to the host NIC, and the PS DDR window is the slower memory; 'pause tx 0' turns it off.

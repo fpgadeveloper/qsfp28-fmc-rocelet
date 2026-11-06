@@ -313,7 +313,9 @@ static int link_loop(void)
 int mac_bringup(int fec, int loop)
 {
 	mac_hw_init();
+#if defined(HAS_VADJ)
 	if (plat_vadj_on() != 0) xil_printf("WARNING: FMC VADJ not confirmed on: the Si5328 may not answer\r\n");
+#endif
 	if (si5328_init(IIC_CLK_BASE, REFCLK_PLAN) != 0) {
 		xil_printf("ERROR: Si5328 programming failed - no GT reference clock\r\n");
 		return -1;
