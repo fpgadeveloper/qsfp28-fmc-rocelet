@@ -133,3 +133,12 @@ order against an MRMAC client model: control / status / PAUSE / event pass-throu
 TX tready stalls, mac_reset mid-traffic (frames vanish whole, never merge), RX overflow at a
 200 / 150 MHz engine clock (whole-frame drops and cut + flagged frames, accounting =
 mac_lev[5]), 250 MHz engine clock. Prints `SIM PASS` / `SIM FAIL`.
+
+## OOC synthesis (2025.2, xcvc1902-vsva2197-2MP-e-S, 2026-11-05)
+
+`synth_design -mode out_of_context`, clk 3.333 ns, axis_clk 2.560 ns, ctl_clk 10 ns
+(asynchronous groups): 5332 LUT (664 LUTRAM, the packer's output FIFO), 6180 FF, 16 BRAM tiles
+(RX FIFO 8.5, TX FIFO 7.5), no DSP / URAM. WNS axis_clk +0.278 ns, clk +1.555 ns, ctl_clk
++8.05 ns; report_cdc: 168 endpoints, all safe. The worst path is TX: skid `os_v` -> downsizer
+accept -> TX FIFO read enable (BRAM REGCE), 4 LUT levels. If it fails after placement, put a
+register slice between the TX FIFO and the downsizer.
