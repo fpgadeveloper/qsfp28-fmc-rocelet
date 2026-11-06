@@ -61,7 +61,7 @@ class Daemon:
 
 
 def load_config(paths):
-    cfg = {"listen": "0.0.0.0", "port": "80", "token": "", "title": "rocelet-z106",
+    cfg = {"listen": "0.0.0.0", "port": "80", "token": "", "title": socket.gethostname() or "rocelet",
            "socket": "/run/rocelet/roceletd.sock"}
     for p in paths:
         try:
